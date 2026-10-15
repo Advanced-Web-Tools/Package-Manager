@@ -1,0 +1,97 @@
+name: Publish package
+
+on:
+  workflow_dispatch:
+    inputs:
+      increment:
+        description: Version increment (the first release is always 1.0.0)
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: read
+
+# Keep version selection and publication serialized across branches.
+concurrency:
+  group: packagemanager-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish PackageManager
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out selected commit and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Test version selection and package layout
+        run: python3 -B -m unittest discover -s tests -p 'test_release.py'
+
+      - name: Read published release tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
+            > "$RUNNER_TEMP/release-tags.txt"
+
+      - name: Set manifest version and build ZIP
+        id: package
+        env:
+          INCREMENT: ${{ inputs.increment }}
+        run: |
+          set -euo pipefail
+          python3 -B build/release.py \
+            --release-tags "$RUNNER_TEMP/release-tags.txt" \
+            --increment "$INCREMENT" \
+            --package PackageManager \
+            --output "$RUNNER_TEMP/release"
+
+      - name: Reject an existing tag
+        env:
+          RELEASE_TAG: ${{ steps.package.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}" || git show-ref --verify --quiet "refs/tags/v${RELEASE_TAG}"; then
+            echo "::error::Tag ${RELEASE_TAG} already exists. No release will be overwritten."
+            exit 1
+          fi
+
+      - name: Publish GitHub release and ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.package.outputs.tag }}
+          PACKAGE_NAME: ${{ steps.package.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+          PACKAGE_ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" "$PACKAGE_ARCHIVE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$PACKAGE_NAME $PACKAGE_VERSION" \
+            --generate-notes
+          {
+            echo "### Published $PACKAGE_NAME $PACKAGE_VERSION"
+            echo
+            echo "Release tag: $RELEASE_TAG"
+            echo
+            echo "Asset: $(basename "$PACKAGE_ARCHIVE")"
+            echo
+            echo 'ZIP layout: manifest.json, main.php, runtime/, controllers/, service/, views/ and data/ at the archive root.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,26 @@
+{
+  "name": "PackageManager",
+  "version": "1.0.0",
+  "minimum_awt_version": "27.0.0",
+  "maximum_awt_version": null,
+  "author": "ElStefanos",
+  "type": 1,
+  "system_package": 1,
+  "description": "Install, inspect and manage AWT packages with administrator controls and an audit trail.",
+  "icon": "icon/icon.webp",
+  "preview_image": null,
+  "license": "MIT",
+  "license_url": null,
+  "dependencies": [
+    {
+      "name": "Dashboard",
+      "version": ">=1.0.0",
+      "url": "https://github.com/Advanced-Web-Tools/Dashboard/releases/download/1.0.2/Dashboard-1.0.2.zip"
+    },
+    {
+      "name": "URPC",
+      "version": ">=1.0.0",
+      "url": "https://github.com/ElStefanos/URPC/releases/download/1.0.0/URPC-1.0.0.zip"
+    }
+  ]
+}
