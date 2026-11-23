@@ -1,4 +1,4 @@
-<section class="card pm-install-panel" id="pm-install-package" aria-labelledby="pm-install-title-inline">
+<section class="pm-install-panel" id="pm-install-package" aria-labelledby="pm-install-title-inline">
     <div class="page-heading"><h2 class="h3" id="pm-install-title-inline">Package archive</h2></div>
     <form action="/dashboard/packages/install/review" method="post" enctype="multipart/form-data" id="pm-upload-form">
         @include('partials/token.awt.php')

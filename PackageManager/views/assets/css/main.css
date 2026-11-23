@@ -242,9 +242,9 @@
 
 /* Install from disk */
 .pm-install-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); list-style: none; margin: 0; padding: 0; counter-reset: install-step; }
-.pm-install-steps li { display: flex; align-items: flex-start; gap: var(--space-2); counter-increment: install-step; }
-.pm-install-steps li::before { content: counter(install-step); display: grid; place-items: center; flex: 0 0 32px; height: 32px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: var(--weight-bold); }
-.pm-install-steps strong, .pm-install-steps span { display: block; }
+.pm-install-steps li { display: flex; align-items: center; gap: var(--space-2); counter-increment: install-step; }
+.pm-install-steps li::before { content: counter(install-step); display: grid; place-items: center; flex: 0 0 32px; height: 32px; border-radius: 50%; background: var(--surface-secondary); color: var(--muted); font-weight: var(--weight-bold); }
+.pm-install-steps li[aria-current="step"]::before { background: var(--accent-soft); color: var(--accent); }
 .pm-install-page .pm-file-picker { padding-block: var(--space-3); }
 .pm-install-page .pm-review-install { width: auto; }
 .pm-install-page .pm-install-next { flex-basis: 100%; }

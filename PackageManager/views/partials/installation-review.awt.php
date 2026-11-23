@@ -1,7 +1,7 @@
-<section class="card" aria-labelledby="pm-review-title">
+<section class="pm-section" aria-labelledby="pm-review-title">
     <div class="page-heading">
         <h2 id="pm-review-title" class="h3">Review {{ $installation['manifest']['name'] }}</h2>
-        <span class="badge badge-muted">Version {{ $installation['manifest']['version'] }}</span>
+        <span class="text-small text-muted">Version {{ $installation['manifest']['version'] }}</span>
     </div>
     <p class="text-muted">{{ $installation['manifest']['description'] ?? 'No description provided.' }}</p>
     <dl class="theme-package-details">
@@ -19,7 +19,7 @@
                 <li>
                     <div class="page-heading">
                         <strong>{{ $dependency['name'] }} <code>{{ $dependency['version'] }}</code></strong>
-                        <span class="badge {{ $dependency['status'] === 'installed' || $dependency['status'] === 'prepared' ? 'pm-outcome-success' : 'pm-outcome-failed' }}">{{ ucfirst($dependency['status']) }}</span>
+                        <span class="pm-status text-small {{ $dependency['status'] === 'installed' || $dependency['status'] === 'prepared' ? 'pm-outcome-success' : 'pm-outcome-failed' }}">{{ ucfirst($dependency['status']) }}</span>
                     </div>
                     <p class="text-small text-muted">Required by {{ $dependency['parent'] }}@if($dependency['installed_version']) · Installed version {{ $dependency['installed_version'] }}@endif</p>
                     @if($dependency['url'])
