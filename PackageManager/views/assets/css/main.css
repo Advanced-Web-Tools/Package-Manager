@@ -151,6 +151,30 @@
 .pm-directory-heading h1 { margin: 0; font-weight: 600; }
 .pm-directory-heading h1 + p { margin-top: var(--space-half); }
 .pm-count { font-variant-numeric: tabular-nums; }
+.pm-installed-list { list-style: none; margin: 0; padding: 0; }
+.pm-installed-row {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto auto;
+    grid-template-areas: "identity description meta arrow";
+    align-items: center;
+    gap: var(--space-2);
+    padding-block: var(--space-2);
+    border-bottom: 1px solid var(--border);
+    overflow-wrap: anywhere;
+}
+.pm-installed-identity { grid-area: identity; display: flex; align-items: center; gap: var(--space-2); }
+.pm-installed-identity h2 { margin: 0; font-size: var(--h5-size); }
+.pm-installed-row .pm-market-card-description { grid-area: description; }
+.pm-installed-meta { grid-area: meta; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
+.pm-installed-arrow { grid-area: arrow; color: var(--muted); }
+@media (max-width: 640px) {
+    .pm-installed-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas: "identity arrow" "description description" "meta meta";
+    }
+    .pm-installed-row .pm-market-card-description,
+    .pm-installed-meta { margin-inline-start: calc(40px + var(--space-2)); }
+}
 .pm-directory-heading p { margin-bottom: 0; }
 .pm-install-panel { margin-bottom: 0; scroll-margin-top: var(--space-4); }
 .pm-install-panel input[type=file] { width: 100%; min-width: 0; }
