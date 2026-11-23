@@ -490,7 +490,7 @@ foreach ($views as $view => $data) {
             && str_contains($detailHtml, 'href="#pm-release-action">Install</a>'), 'Package header identifies the publisher and links to install confirmation');
         check(preg_match('/<video[^>]+muted[^>]+data-market-preview[^>]*>/s', $detailHtml, $coverVideo)
             && !str_contains($coverVideo[0], 'controls'), 'Cover videos are muted and have no controls');
-        check(str_contains($detailHtml, 'Publisher screenshots') && str_contains($detailHtml, 'https://market.test/storefront/14/album/files/4')
+        check(str_contains($detailHtml, 'id="pm-gallery-title">Gallery</h2>') && str_contains($detailHtml, 'https://market.test/storefront/14/album/files/4')
             && str_contains($detailHtml, 'src="https://market.test/storefront/14/album/files/5"'), 'Package detail renders images and playable gallery videos');
         check(str_contains($detailHtml, 'action="/dashboard/packages/browse/install"') && str_contains($detailHtml, 'test-csrf')
             && str_contains($detailHtml, 'name="release_id" value="19"'), 'Marketplace detail posts the selected release with CSRF');
@@ -503,8 +503,9 @@ foreach ($views as $view => $data) {
         check(str_contains($downgradeHtml, 'id="pm-downgrade-dialog"') && str_contains($downgradeHtml, 'name="downgrade_confirmed"')
             && str_contains($downgradeHtml, 'target="_blank"') && str_contains($downgradeHtml, '/storefront/14#reviews'),
             'Browse renders the downgrade warning and an external rating link');
-        check(str_contains($downgradeHtml, 'disabled>Installed</button>') && str_contains($downgradeHtml, 'href="#pm-release-action">Update</a>'),
-            'Installed package displays a disabled status and an available update action');
+        check(str_contains($downgradeHtml, 'href="/dashboard/packages/' . $marketUpdated->id . '">Manage installed package</a>')
+            && str_contains($downgradeHtml, 'href="#pm-release-action">Update</a>'),
+            'Installed Marketplace package offers management and update actions');
         foreach (['creator', 'organization'] as $type) {
             $profileBundle = array_replace($common, $data);
             $profileBundle['marketplaceBrowse']['profile'] = ['type' => $type, 'name' => ucfirst($type) . ' profile', 'description' => 'Profile description',
@@ -516,7 +517,7 @@ foreach ($views as $view => $data) {
             ], $type);
             $profileHtml = $blade->run('browse', $profileBundle);
             $relatedProfile = $type === 'creator' ? 'owner=organization&amp;profile=18' : 'owner=creator&amp;profile=17';
-            check(str_contains($profileHtml, $relatedProfile) && str_contains($profileHtml, 'Publisher screenshots'),
+            check(str_contains($profileHtml, $relatedProfile) && str_contains($profileHtml, 'id="pm-gallery-title">Gallery</h2>'),
                 'Publisher profile renders gallery and links to related profiles');
             check(str_contains($profileHtml, ucfirst($type) . ' profile') && str_contains($profileHtml, 'https://publisher.test')
                 && str_contains($profileHtml, 'Market Root'), 'Browse renders the ' . $type . ' profile with its packages');
