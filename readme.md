@@ -51,6 +51,6 @@ Once PackageManager is set up, open **Dashboard → Packages** to explore your i
 2. Review the package and prepare any missing requirements from trusted sources, where available.
 3. Confirm installation, then enable the required packages and your new addition when you’re ready.
 
-Package discovery through the **Browse** page is coming soon. You can already install packages downloaded from publishers you trust.
+Use **Browse** to search the Marketplace and install compatible packages directly on your server. Open a Marketplace package under **Installed** to check for a newer compatible release. Set the server environment variable `AWT_MARKETPLACE_ORIGIN` to use a different Marketplace deployment.
 
 <p align="center"><strong>Know what powers your site. Choose what comes next.</strong></p>

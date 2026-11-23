@@ -7,11 +7,19 @@ class DependencyDownload
 {
     public function fetch(string $url, string $destination): void
     {
+        $this->transfer($url, $destination, PackageArchive::MAX_BYTES);
+    }
+
+    public function transfer(string $url, string $destination, int $maxBytes, ?string $origin = null): void
+    {
         if (!extension_loaded('curl')) throw new \RuntimeException('The cURL extension is required to download dependencies.');
         $handle = fopen($destination, 'wb');
         if (!$handle) throw new \RuntimeException('Unable to store the dependency archive.');
         try {
             for ($redirect = 0; $redirect < 6; $redirect++) {
+                if ($origin !== null && !str_starts_with($url, $origin . '/')) {
+                    throw new \RuntimeException('Marketplace request redirected outside its origin.');
+                }
                 $parts = parse_url($url);
                 if (!Packages::licenseUrl($url) || !$parts || isset($parts['user']) || isset($parts['pass'])) {
                     throw new \RuntimeException('Dependency sources must be public HTTP or HTTPS URLs without credentials.');
@@ -37,18 +45,19 @@ class DependencyDownload
                         CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
                         CURLOPT_PROXY => '', CURLOPT_RESOLVE => [$host . ':' . $port . ':' . $addresses[0]],
                         CURLOPT_USERAGENT => 'AWT-PackageManager/1.0',
-                        CURLOPT_WRITEFUNCTION => static function ($curl, string $chunk) use ($handle, &$size): int {
+                        CURLOPT_WRITEFUNCTION => static function ($curl, string $chunk) use ($handle, &$size, $maxBytes): int {
                             $size += strlen($chunk);
-                            if ($size > PackageArchive::MAX_BYTES) return 0;
+                            if ($size > $maxBytes) return 0;
                             return fwrite($handle, $chunk);
                         },
                     ]);
                     $result = curl_exec($curl);
                     $status = curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
                     $next = curl_getinfo($curl, CURLINFO_REDIRECT_URL);
-                    if ($result === false) throw new \RuntimeException('Dependency download failed or exceeded 50 MB.');
+                    if ($result === false) throw new \RuntimeException('The package source request failed or exceeded its size limit.');
                     if (in_array($status, [301, 302, 303, 307, 308], true) && $next) { $url = $next; continue; }
-                    if ($status !== 200 || $size === 0) throw new \RuntimeException('Dependency source did not return a package ZIP (HTTP ' . $status . ').');
+                    if ($status !== 200) throw new \RuntimeException('The package source returned HTTP ' . $status . '.', $status);
+                    if ($size === 0) throw new \RuntimeException('The package source returned an empty response.');
                     return;
                 } finally { curl_close($curl); }
             }

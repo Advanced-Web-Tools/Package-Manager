@@ -21,6 +21,7 @@ define('AWT_VERSION', '27.0.0');
 define('DEBUG', true);
 foreach ([DATA, PACKAGES, PACKAGE_STORAGE, COMPILED] as $path) mkdir($path, 0755, true);
 file_put_contents(CONFIG . 'awt_db.php', "<?php const DB_TYPE = 'sqlite'; const DB_NAME = ':memory:';");
+require_once CONFIG . 'awt_db.php';
 function removeTree(string $path): void {
     if (is_dir($path) && !is_link($path)) {
         foreach (array_diff(scandir($path), ['.', '..']) as $file) removeTree($path . '/' . $file);
@@ -71,6 +72,8 @@ PackageManager\service\Access::administrator($actor);
 PackageManager\migrations\CreatePackageLog::up(1);
 PackageManager\migrations\CreatePackageLog::up(1);
 check(count($provider->execute("SELECT name FROM awt_table WHERE name='packagemanager_log'")->fetchAll()) === 1, 'Migration idempotent');
+PackageManager\migrations\CreateMarketplaceSources::up(1);
+PackageManager\migrations\CreateMarketplaceSources::up(1);
 $facade = new package\facade\PackageFacade();
 $service = new PackageManager\service\Packages();
 $archive = new PackageManager\service\PackageArchive();
@@ -365,16 +368,98 @@ foreach (['file:///etc/passwd', 'http://127.0.0.1/package.zip', 'http://10.0.0.1
     catch (RuntimeException $error) { check(true, 'Unsafe dependency download rejected'); }
 }
 
+// Exercise the Marketplace API flow without network or browser downloads.
+$marketOrigin = 'https://market.test';
+$marketPrefix = $marketOrigin . '/api/v1/marketplace';
+$marketDependency = array_replace($base, ['name' => 'MarketDependency']);
+$marketManifest = array_replace($base, ['name' => 'MarketRoot', 'dependencies' => [
+    ['name' => 'MarketDependency', 'version' => '*'],
+]]);
+zipPackage(ROOT . 'market-root.zip', $marketManifest);
+$marketNewManifest = array_replace($marketManifest, ['version' => '2.0.0']);
+zipPackage(ROOT . 'market-new.zip', $marketNewManifest, ['new-only.php' => '<?php // New release file.']);
+zipPackage(ROOT . 'market-dependency.zip', $marketDependency);
+$marketRelease = ['id' => 19, 'package_id' => 14, 'name' => 'MarketRoot', 'version' => $base['version'],
+    'minimum_awt_version' => $base['minimum_awt_version'], 'maximum_awt_version' => null, 'published_at' => '2026-10-01'];
+$marketNewRelease = array_replace($marketRelease, ['id' => 21, 'version' => '2.0.0']);
+$dependencyRelease = array_replace($marketRelease, ['id' => 20, 'package_id' => 15, 'name' => 'MarketDependency']);
+$marketDependencies = ['dependencies' => [['name' => 'MarketDependency', 'constraint' => '*', 'ambiguous' => false, 'resolved' => $dependencyRelease]]];
+$transport = new class ([
+    $marketPrefix . '/package/14/versions/18' => $marketRelease + $marketDependencies,
+    $marketPrefix . '/package/14/versions/19' => $marketRelease + $marketDependencies,
+    $marketPrefix . '/package/14/versions/21' => $marketNewRelease + $marketDependencies,
+    $marketPrefix . '/package/manifest/14?version_id=21' => $marketNewRelease + ['manifest' => $marketNewManifest],
+    $marketPrefix . '/package/14/versions/21/download' => ROOT . 'market-new.zip',
+    $marketPrefix . '/package/manifest/14?version_id=19' => $marketRelease + ['manifest' => $marketManifest],
+    $marketPrefix . '/package/15/versions/20' => $dependencyRelease + ['dependencies' => []],
+    $marketPrefix . '/package/manifest/15?version_id=20' => $dependencyRelease + ['manifest' => $marketDependency],
+    $marketPrefix . '/package/14/versions/19/download' => ROOT . 'market-root.zip',
+    $marketPrefix . '/package/15/versions/20/download' => ROOT . 'market-dependency.zip',
+]) extends PackageManager\service\DependencyDownload {
+    public function __construct(private array $fixtures) {}
+    public function transfer(string $url, string $destination, int $maxBytes, ?string $origin = null): void
+    {
+        $fixture = $this->fixtures[$url] ?? throw new RuntimeException('Unexpected Marketplace request ' . $url);
+        if (is_array($fixture)) file_put_contents($destination, json_encode(['status' => 200, 'data' => $fixture], JSON_THROW_ON_ERROR));
+        else copy($fixture, $destination);
+    }
+};
+$market = new PackageManager\service\Marketplace($marketOrigin, $transport);
+$marketInstall = new PackageManager\service\MarketplaceInstallation($market);
+rejects(fn() => $marketInstall->install($actor, 14, 18, true), 'unavailable or changed');
+$marketPackage = $marketInstall->install($actor, 14, 19, true);
+$marketDepPackage = $facade->getPackage('MarketDependency');
+$marketUpdated = $marketInstall->install($actor, 14, 21, true, $marketPackage->id, $marketPackage->version);
+check($marketUpdated->id === $marketPackage->id && $marketUpdated->version === '2.0.0'
+    && is_file(PACKAGES . 'MarketRoot/new-only.php'), 'Marketplace update replaces the installed release in place');
+check((int) PackageManager\service\MarketplacePackageRepository::find($marketUpdated->id)['release_id'] === 21,
+    'Update persists the selected release source');
+rejects(fn() => $marketInstall->install($actor, 14, 19, true, $marketUpdated->id, '1.0.0', true), 'installed version changed');
+rejects(fn() => $marketInstall->install($actor, 14, 19, true, $marketUpdated->id, $marketUpdated->version), 'Confirm the downgrade');
+$marketPackage = $marketInstall->install($actor, 14, 19, true, $marketUpdated->id, $marketUpdated->version, true);
+check($marketPackage->id === $marketUpdated->id && $marketPackage->version === '1.0.0'
+    && !is_file(PACKAGES . 'MarketRoot/new-only.php'), 'Confirmed downgrade removes files absent from the older release');
+foreach ([[$marketPackage, 14, 19], [$marketDepPackage, 15, 20]] as [$installedMarketPackage, $storefrontId, $versionId]) {
+    $source = PackageManager\service\MarketplacePackageRepository::find($installedMarketPackage->id);
+    check(!$installedMarketPackage->status && $source['download_url'] === $market->source($storefrontId, $versionId)['download_url'],
+        'Marketplace packages and dependencies are installed disabled with their exact source');
+    check(PackageManager\service\Marketplace::fromSource($source)->origin === $marketOrigin, 'Update checks recover the original API origin');
+    $service->change($actor, $installedMarketPackage->id, 'remove');
+    check(PackageManager\service\MarketplacePackageRepository::find($installedMarketPackage->id) === null, 'Removing a package removes its source');
+}
+$marketGallery = $market->gallery(['name' => 'Publisher screenshots', 'description' => '', 'items' => [
+    ['type' => 'image', 'url' => '/storefront/14/album/files/4'],
+    ['type' => 'video', 'url' => '/storefront/14/album/files/5'],
+    ['type' => 'image', 'url' => '/storefront/14/album/files/6'],
+    ['type' => 'image', 'url' => 'javascript:alert(1)'],
+]]);
+check(count($marketGallery['items']) === 3, 'Marketplace gallery excludes unsupported media URLs');
+$marketItem = ['id' => 14, 'name' => 'Market Root', 'description' => '<p><strong>From Marketplace</strong></p><ul><li>First feature</li></ul>', 'tags' => [],
+    'rating' => ['score' => 4.5, 'count' => 4], 'installed_id' => null, 'release' => $marketRelease,
+    'selected' => $marketRelease, 'versions' => [$marketNewRelease, $marketRelease], 'page' => 1, 'previous' => null, 'next' => null,
+    'installed' => null, 'operation' => 'Install on server', 'manifest' => $marketManifest,
+    'owner' => ['type' => 'creator'], 'publisher' => 'Marketplace Publisher', 'owner_url' => '/dashboard/packages/browse?owner=creator&profile=1',
+    'rating_url' => $marketOrigin . '/storefront/14#reviews', 'gallery' => $marketGallery]
+    + $market->artwork(['cover_url' => '/photo.webp', 'cover_video_url' => '/preview.webm']);
+
+$descriptionMarkup = new PackageManager\service\PackageReadme();
+check($descriptionMarkup->description("First paragraph\n&#13;\nSecond paragraph") === '<p>First paragraph</p><p>Second paragraph</p>',
+    'Marketplace plain text preserves paragraphs without exposing encoded carriage returns');
+
 // Compile every page through the actual framework Blade engine and Dashboard template.
 symlink($dashboard, PACKAGES . 'Dashboard');
-$common = ['navigation' => '', 'name' => 'Packages', 'tab' => 'Installed', 'packageTab' => 'overview', 'installation' => null, 'token' => 'test-csrf', 'notice' => null, 'enablePrompt' => null, 'package' => null];
+$common = ['navigation' => '', 'name' => 'Packages', 'tab' => 'Installed', 'packageTab' => 'overview', 'installation' => null, 'token' => 'test-csrf', 'notice' => null, 'enablePrompt' => null, 'package' => null, 'marketplaceSource' => null, 'marketplaceUpdate' => null, 'marketplaceUpdateError' => null];
 $metadata = $service->metadata($package); unset($metadata['description']);
 $views = [
     'index' => array_merge($service->catalog($actor), ['enablePrompt' => ['id' => $package->id, 'name' => 'Example']]),
     'install' => ['tab' => 'Install from disk'],
-    'browse' => ['tab' => 'Browse'], 'help' => ['tab' => 'Help'],
+    'browse' => ['tab' => 'Browse', 'marketplaceBrowse' => [
+        'sections' => ['featured' => [$marketItem]], 'labels' => ['featured' => 'Featured'], 'sorts' => ['name' => 'Name'],
+        'sort' => 'name', 'section' => '', 'tags' => [], 'tag' => '', 'search' => '', 'detail' => null,
+        'error' => null, 'page' => 1, 'previous' => null, 'next' => null,
+    ]], 'help' => ['tab' => 'Help'],
     'logs' => ['tab' => 'Logs', 'entries' => $history, 'logPage' => 1, 'hasMore' => true],
-    'show' => ['package' => $package, 'metadata' => $metadata, 'readme' => $readme, 'readmeError' => null, 'description' => $base['description'], 'dependencies' => $service->dependencies($actor, $dependencyPackage)],
+    'show' => ['package' => $package, 'metadata' => $metadata, 'readme' => $readme, 'readmeError' => null, 'description' => '<p><strong>Rich description</strong></p>' . $base['description'], 'dependencies' => $service->dependencies($actor, $dependencyPackage)],
 ];
 foreach ($views as $view => $data) {
     $blade = new render\TemplateEngine\BladeOne(dirname(__DIR__) . '/PackageManager/views', COMPILED, render\TemplateEngine\BladeOne::MODE_SLOW);
@@ -384,13 +469,71 @@ foreach ($views as $view => $data) {
     $html = $blade->run($view, array_replace($common, $data));
     check(str_contains($html, 'dashboard-sidebar') && str_contains($html, 'Package management'), $view . ' renders inside Dashboard');
     check(!str_contains($html, '@include') && !str_contains($html, '@if'), $view . ' directives compiled');
-    if ($view === 'index') check(!str_contains($html, 'id="pm-upload-form"'), 'Installed page no longer includes ZIP installer');
+    if ($view === 'browse') {
+        check(str_contains($html, 'data-hover-preview="14"') && str_contains($html, 'data-preview-url="https://market.test/preview.webm"')
+            && !str_contains($html, 'src="https://market.test/preview.webm"'), 'Browse renders the photo and defers the video source');
+        $detailBundle = array_replace($common, $data);
+        $detailBundle['marketplaceBrowse']['detail'] = $marketItem;
+        $detailHtml = $blade->run('browse', $detailBundle);
+        check(substr_count($detailHtml, 'data-gallery-image') === 2 && substr_count($detailHtml, 'data-gallery-step') === 2,
+            'Multiple gallery images have navigation arrows and exclude videos from the image viewer');
+        $singleImageBundle = $detailBundle;
+        $singleImageBundle['marketplaceBrowse']['detail']['gallery']['items'] = array_slice($marketGallery['items'], 0, 2);
+        $singleImageHtml = $blade->run('browse', $singleImageBundle);
+        check(str_contains($singleImageHtml, 'pm-gallery-viewer') && !str_contains($singleImageHtml, 'data-gallery-step'),
+            'A single gallery image opens without navigation arrows');
+        check(str_contains($detailHtml, '<strong>From Marketplace</strong>') && str_contains($detailHtml, '<li>First feature</li>')
+            && strpos($detailHtml, 'Latest compatible stable version') < strpos($detailHtml, 'id="pm-gallery-title"')
+            && strpos($detailHtml, 'id="pm-gallery-title"') < strpos($detailHtml, 'id="pm-market-description"'),
+            'Marketplace description preserves rich markup and gallery follows the package facts');
+        check(str_contains($detailHtml, 'Published by') && str_contains($detailHtml, 'Marketplace Publisher')
+            && str_contains($detailHtml, 'href="#pm-release-action">Install</a>'), 'Package header identifies the publisher and links to install confirmation');
+        check(preg_match('/<video[^>]+muted[^>]+data-market-preview[^>]*>/s', $detailHtml, $coverVideo)
+            && !str_contains($coverVideo[0], 'controls'), 'Cover videos are muted and have no controls');
+        check(str_contains($detailHtml, 'Publisher screenshots') && str_contains($detailHtml, 'https://market.test/storefront/14/album/files/4')
+            && str_contains($detailHtml, 'src="https://market.test/storefront/14/album/files/5"'), 'Package detail renders images and playable gallery videos');
+        check(str_contains($detailHtml, 'action="/dashboard/packages/browse/install"') && str_contains($detailHtml, 'test-csrf')
+            && str_contains($detailHtml, 'name="release_id" value="19"'), 'Marketplace detail posts the selected release with CSRF');
+    }
+    if ($view === 'browse') {
+        $detailBundle['marketplaceBrowse']['detail']['installed'] = $marketUpdated;
+        $detailBundle['marketplaceBrowse']['detail']['operation'] = 'Downgrade';
+        $detailBundle['marketplaceBrowse']['detail']['update_url'] = '#pm-release-action';
+        $downgradeHtml = $blade->run('browse', $detailBundle);
+        check(str_contains($downgradeHtml, 'id="pm-downgrade-dialog"') && str_contains($downgradeHtml, 'name="downgrade_confirmed"')
+            && str_contains($downgradeHtml, 'target="_blank"') && str_contains($downgradeHtml, '/storefront/14#reviews'),
+            'Browse renders the downgrade warning and an external rating link');
+        check(str_contains($downgradeHtml, 'disabled>Installed</button>') && str_contains($downgradeHtml, 'href="#pm-release-action">Update</a>'),
+            'Installed package displays a disabled status and an available update action');
+        foreach (['creator', 'organization'] as $type) {
+            $profileBundle = array_replace($common, $data);
+            $profileBundle['marketplaceBrowse']['profile'] = ['type' => $type, 'name' => ucfirst($type) . ' profile', 'description' => 'Profile description',
+                'links' => [['label' => 'Website', 'url' => 'https://publisher.test']], 'items' => [$marketItem]] + $market->artwork([]);
+            $profileBundle['marketplaceBrowse']['profile']['gallery'] = $marketGallery;
+            $profileBundle['marketplaceBrowse']['profile']['relationships'] = $market->profileRelationships([
+                'members' => [['id' => 17, 'name' => 'Maintainer', 'username' => 'maintainer', 'is_owner' => true]],
+                'organizations' => [['id' => 18, 'name' => 'Publisher organization']],
+            ], $type);
+            $profileHtml = $blade->run('browse', $profileBundle);
+            $relatedProfile = $type === 'creator' ? 'owner=organization&amp;profile=18' : 'owner=creator&amp;profile=17';
+            check(str_contains($profileHtml, $relatedProfile) && str_contains($profileHtml, 'Publisher screenshots'),
+                'Publisher profile renders gallery and links to related profiles');
+            check(str_contains($profileHtml, ucfirst($type) . ' profile') && str_contains($profileHtml, 'https://publisher.test')
+                && str_contains($profileHtml, 'Market Root'), 'Browse renders the ' . $type . ' profile with its packages');
+        }
+    }
+    if ($view === 'index') {
+        check(!str_contains($html, 'id="pm-upload-form"'), 'Installed page no longer includes ZIP installer');
+        check(str_contains($html, 'class="pm-market-media" src="/awt_packages/PackageManager/views/assets/images/default_preview.webp"'),
+            'Installed cards render the supplied default artwork for missing previews');
+    }
     if ($view === 'install') {
         check(str_contains($html, 'id="pm-upload-form"') && str_contains($html, 'Installation steps'), 'Install page contains file picker and guidance');
         check(str_contains($html, 'href="/dashboard/packages/install-from-disk" class="active"'), 'Install tab is active');
     }
     if ($view === 'show') {
-        check(str_contains($html, 'Installation Date') && str_contains($html, '&lt;script&gt;'), 'All metadata and escaped description');
+        check(str_contains($html, 'Installation Date') && str_contains($html, '<strong>Rich description</strong>')
+            && !str_contains($html, '<script>alert("x")</script>'), 'Installed description preserves safe formatting and strips active markup');
         check(strpos($html, 'Installation Date') < strpos($html, 'id="pm-description-title"'), 'Description below metadata');
         check(!str_contains($html, 'id="pm-readme-title"') && !str_contains($html, '<iframe'), 'Overview excludes README and license content');
     }
@@ -401,13 +544,14 @@ foreach ($views as $view => $data) {
     $dom = new DOMDocument();
     libxml_use_internal_errors(true); $dom->loadHTML($html); libxml_clear_errors();
     $xpath = new DOMXPath($dom);
-    check($xpath->query('//header[contains(@class,"navbar")]//nav[contains(@class,"nav-tabs")]')->length === 1, $view . ' tabs inside header');
-    check($xpath->query('//header[contains(@class,"navbar")]//a[@href="/dashboard/packages/logs"]')->length === 0, $view . ' no header logs button');
+    check($xpath->query('//header[contains(@class,"navbar")]//nav[@aria-label="Package pages"]')->length === 1, $view . ' primary tabs inside header');
+    check($xpath->query('//nav[@aria-label="Package pages"]//a[@href="/dashboard/packages/logs"]')->length === 1, $view . ' includes a Logs tab');
+    check($xpath->query('//nav[@aria-label="Package pages"]//a[@href="/dashboard/packages/logs"][@aria-current="page"]')->length === ($view === 'logs' ? 1 : 0), $view . ' marks the Logs tab current only on Logs');
     if ($view === 'show') {
         check($xpath->query('//header[contains(@class,"navbar")]//div[@class="theme-hero"]//img')->length === 1, 'Package header contains icon');
         check($xpath->query('//section[contains(@class,"pm-overview")]//img[contains(@class,"pm-package-preview")]')->length === 1, 'Preview belongs to Overview');
         check($xpath->query('//nav[@aria-label="Package details"]//a/i')->length === 3, 'Package tabs have Font Awesome icons');
-        check($xpath->query('//nav[@aria-label="Package details"]//a[@href="/dashboard/packages"]')->length === 0, 'Details replaces directory tabs');
+        check($xpath->query('//nav[@aria-label="Package details"]//a[@href="/dashboard/packages"]')->length === 0, 'Secondary tabs only navigate within the package');
         check(str_contains($html, 'theme-dependency-missing') && !str_contains($html, '&quot;dependencies&quot;'), 'Dependency statuses rendered without raw JSON');
     }
     check($xpath->query('//form[@method="post"][not(.//input[@name="_token"])]')->length === 0, $view . ' forms include CSRF');
@@ -538,7 +682,7 @@ $rejected = $executor->execute($route, new router\http\Request(['REQUEST_METHOD'
 check($rejected instanceof response\Response && (new ReflectionProperty($rejected, 'statusCode'))->getValue($rejected) === 403, 'Real mutation route rejects forged CSRF');
 $rejected = $executor->execute($route, new router\http\Request(['REQUEST_METHOD' => 'GET']));
 check($rejected instanceof response\Response && (new ReflectionProperty($rejected, 'statusCode'))->getValue($rejected) === 405, 'Real mutation route rejects GET');
-foreach (['/install/review' => 'reviewInstallation', '/install/dependencies' => 'prepareDependencies', '/install/cancel' => 'cancelInstallation', '/install' => 'install'] as $path => $action) {
+foreach (['/install/review' => 'reviewInstallation', '/install/dependencies' => 'prepareDependencies', '/install/cancel' => 'cancelInstallation', '/install' => 'install', '/browse/install' => 'installFromMarketplace'] as $path => $action) {
     $route = (new router\Router('/dashboard/packages' . $path, $action, clone $factory))->setMethod('POST');
     $rejected = $executor->execute($route, new router\http\Request(['REQUEST_METHOD' => 'POST'], ['_token' => 'forged']));
     check($rejected instanceof response\Response && (new ReflectionProperty($rejected, 'statusCode'))->getValue($rejected) === 403, 'Installation mutation rejects forged CSRF');
@@ -548,4 +692,18 @@ foreach (['/install/review' => 'reviewInstallation', '/install/dependencies' => 
 $csrf = new router\security\Csrf();
 check($csrf->validateToken($csrf->token()), 'Framework CSRF accepts own token');
 check(!$csrf->validateToken('invalid'), 'Framework CSRF rejects forged token');
+$systemMarketManifest = array_replace($base, ['name' => 'MarketplaceSystem', 'system_package' => true]);
+$systemMarketPath = ROOT . 'marketplace-system.zip';
+zipPackage($systemMarketPath, $systemMarketManifest);
+$systemMarket = $service->installMarketplace($actor, ['MarketplaceSystem' => [
+    'path' => $systemMarketPath, 'source' => $market->source(55, 71), 'manifest' => $systemMarketManifest,
+]]);
+check($systemMarket->system_package && $systemMarket->status, 'Marketplace system packages follow framework activation behavior');
+$systemMarketManifest['version'] = '2.0.0';
+zipPackage($systemMarketPath, $systemMarketManifest);
+$systemMarketUpdated = $service->installMarketplace($actor, ['MarketplaceSystem' => [
+    'path' => $systemMarketPath, 'source' => $market->source(55, 72), 'manifest' => $systemMarketManifest,
+]], $systemMarket);
+check($systemMarketUpdated->id === $systemMarket->id && $systemMarketUpdated->status && $systemMarketUpdated->version === '2.0.0',
+    'An installed Marketplace system package can change releases in place');
 echo "Passed {$checks} integration checks.\n";

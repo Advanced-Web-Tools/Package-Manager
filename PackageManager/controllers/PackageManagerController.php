@@ -8,6 +8,9 @@ use PackageManager\service\PackageArchive;
 use PackageManager\service\Packages;
 use PackageManager\service\PackageReadme;
 use PackageManager\service\InstallationPlan;
+use PackageManager\service\Marketplace;
+use PackageManager\service\MarketplaceInstallation;
+use PackageManager\service\MarketplacePackageRepository;
 use redirect\Redirect;
 use response\Response;
 use router\security\Csrf;
@@ -38,6 +41,10 @@ final class PackageManagerController extends DashboardControllerBase
     public array $entries;
     public int $logPage;
     public bool $hasMore;
+    public array $marketplaceBrowse;
+    public ?array $marketplaceSource;
+    public ?string $marketplaceUpdate;
+    public ?string $marketplaceUpdateError;
 
     public function __construct()
     {
@@ -73,7 +80,176 @@ final class PackageManagerController extends DashboardControllerBase
 
     public function browse(array|string $params): View
     {
-        return $this->page('browse', 'Browse');
+        $actor = $this->authorize();
+        $labels = Marketplace::SECTIONS;
+        $sorts = ['name' => 'Name'] + $labels;
+        $section = is_string($_GET['section'] ?? null) && isset($labels[$_GET['section']]) ? $_GET['section'] : '';
+        $search = is_string($_GET['q'] ?? null) ? trim($_GET['q']) : '';
+        $sort = is_string($_GET['sort'] ?? null) && isset($sorts[$_GET['sort']]) ? $_GET['sort'] : 'name';
+        $tag = filter_var($_GET['tag'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: '';
+        $page = filter_var($_GET['page'] ?? 1, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: 1;
+        $detailId = filter_var($_GET['package'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: null;
+        $profileType = in_array($_GET['owner'] ?? null, ['creator', 'organization'], true) ? $_GET['owner'] : null;
+        $profileId = filter_var($_GET['profile'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: null;
+        $profile = $detail = $error = $previous = $next = null;
+        $sections = $tags = [];
+        try {
+            if (!preg_match('/\A.{0,200}\z/us', $search)) throw new InvalidArgumentException('Search must contain at most 200 characters of valid text.');
+            $market = new Marketplace();
+            $compatibility = Marketplace::compatibility();
+            $installed = [];
+            foreach ((new Packages())->all($actor) as $package) $installed[$package->name] = $package;
+            $markup = new PackageReadme();
+            $decorate = static function (array $item) use ($market, $installed, $markup): array {
+                $item['description_excerpt'] = $markup->description($item['description_html'] ?? $item['description'] ?? null, marketplace: $market, excerpt: true);
+                $item['release'] = $item['latest_compatible_stable'] ?? null;
+                if (!array_key_exists('latest_compatible_stable', $item)) $item['release'] = $item['latest_stable'] ?? null;
+                $item['installed_id'] = ($installed[$item['release']['name'] ?? $item['latest_stable']['name'] ?? ''] ?? null)?->id;
+                return $item + $market->artwork($item);
+            };
+
+            if ($detailId) {
+                $detail = $this->marketplaceDetail($market, $decorate($market->get('/package/' . $detailId, $compatibility)), $installed, $page);
+            } elseif ($profileType && $profileId) {
+                $path = $profileType === 'creator' ? '/creators/' : '/organizations/';
+                $path .= $profileId;
+                $profile = $market->get($path);
+                $profile += $market->artwork($profile);
+                $profile['type'] = $profileType;
+                $profile['description_markup'] = $markup->description($profile['description_html'] ?? $profile['description'] ?? null, marketplace: $market);
+                if ($profileType === 'creator') {
+                    $profile['avatar'] = $market->creatorAvatar($profile);
+                }
+                $profile['gallery'] = $market->gallery($profile['gallery'] ?? null);
+                $profile['relationships'] = $market->profileRelationships($profile, $profileType);
+                $profile['links'] = array_values(array_filter(array_map(static function (array $link) use ($market): ?array {
+                    $url = $market->media($link['url']);
+                    return $url ? ['label' => $link['label'], 'url' => $url] : null;
+                }, $profile['links'])));
+                $collection = $market->get($path . '/storefronts', $compatibility + ['page' => $page]);
+                $profile['items'] = array_map($decorate, $collection['items']);
+                $profileUrl = static fn(int $number): string => '/dashboard/packages/browse?' . http_build_query([
+                    'owner' => $profileType, 'profile' => $profileId, 'page' => $number,
+                ]);
+                $previous = $page > 1 ? $profileUrl($page - 1) : null;
+                $next = $page < ceil($collection['total'] / $collection['per_page']) ? $profileUrl($page + 1) : null;
+            } else {
+                $tags = $market->get('/tags')['items'];
+                $filters = ['q' => $search, 'tag' => $tag, 'sort' => $sort];
+                if (!$section && $search === '' && $tag === '' && !isset($_GET['sort'])) {
+                    foreach ($market->get('/browse/home', $compatibility)['sections'] as $key => $items) {
+                        if ($items && isset($labels[$key])) $sections[$key] = array_map($decorate, $items);
+                    }
+                } else {
+                    $query = $section ? ['section' => $section] : $filters;
+                    $path = $section ? '/browse/' . $section : '/package/search';
+                    $parameters = $section ? [] : array_filter($filters, static fn($value) => $value !== '');
+                    $data = $market->get($path, $parameters + $compatibility + ['page' => $page]);
+                    $sections[$section ?: 'search'] = array_map($decorate, $data['items']);
+                    $pageUrl = static fn(int $number): string => '/dashboard/packages/browse?' . http_build_query($query + ['page' => $number]);
+                    if ($page > 1) $previous = $pageUrl($page - 1);
+                    if ($page < ceil($data['total'] / $data['per_page'])) $next = $pageUrl($page + 1);
+                }
+            }
+        } catch (Throwable $failure) {
+            $profile = null;
+            $error = $failure->getMessage();
+        }
+        $marketplaceBrowse = compact('sections', 'labels', 'sorts', 'sort', 'section', 'tags', 'tag', 'search', 'detail', 'profile', 'error', 'page', 'previous', 'next');
+        return $this->page('browse', 'Browse', compact('marketplaceBrowse'));
+    }
+
+    private function marketplaceDetail(Marketplace $market, array $item, array $installed, int $page): array
+    {
+        $item['description_markup'] = (new PackageReadme())->description($item['description_html'] ?? $item['description'] ?? null, marketplace: $market);
+        $item['gallery'] = $market->gallery($item['gallery'] ?? null);
+        $id = $item['id'];
+        $base = '/dashboard/packages/browse?package=' . $id;
+        $data = $market->get("/package/{$id}/versions", Marketplace::compatibility() + ['page' => $page]);
+        $requested = filter_var($_GET['release'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        $versions = array_column($data['items'], null, 'id');
+        $selected = $versions[$requested] ?? $versions[$item['release']['id'] ?? 0] ?? reset($versions);
+        $item['selected'] = $selected ?: null;
+        $item['versions'] = $versions;
+        $item['page'] = $page;
+        $item['previous'] = $page > 1 ? $base . '&page=' . ($page - 1) : null;
+        $item['next'] = $page < ceil($data['total'] / $data['per_page']) ? $base . '&page=' . ($page + 1) : null;
+        $item['rating_url'] = $market->origin . '/storefront/' . $id . '#reviews';
+        $owner = $item['owner'];
+        $item['owner_url'] = '/dashboard/packages/browse?' . http_build_query(['owner' => $owner['type'], 'profile' => $owner['id']]);
+        $item['publisher'] = ucfirst($owner['type']);
+        try {
+            $collection = $owner['type'] === 'creator' ? 'creators' : 'organizations';
+            $publisher = $market->get("/{$collection}/" . (int) $owner['id']);
+            $item['publisher'] = $publisher['name'] ?? $item['publisher'];
+        } catch (RuntimeException | JsonException $error) {
+            // A publisher profile can become unavailable independently of its package.
+        }
+        $item['manifest'] = [];
+        $item['operation'] = null;
+        $item['installed'] = $installed[$selected['name'] ?? $item['release']['name'] ?? $item['latest_stable']['name'] ?? ''] ?? null;
+        if (!$selected) return $item;
+
+        $release = $market->get("/package/manifest/{$id}", ['version_id' => $selected['id']]);
+        $manifest = $item['manifest'] = $release['manifest'];
+        $current = $item['installed'];
+        if (($manifest['type'] ?? 0) === 0) return $item;
+        if (!$current) {
+            $item['operation'] = 'Install on server';
+            return $item;
+        }
+        $source = MarketplacePackageRepository::find($current->id);
+        if ($manifest['type'] !== $current->type || $current->system_package !== !empty($manifest['system_package']) || ($source && $source['latest_url'] !== $market->source($id, $selected['id'])['latest_url'])) return $item;
+        $latest = $item['release'];
+        if ($latest && $latest['name'] === $current->name && version_compare($latest['version'], $current->version, '>')) {
+            $item['update_url'] = $base . '#pm-release-action';
+        }
+        $item['operation'] = match (version_compare($selected['version'], $current->version)) {
+            1 => 'Update', -1 => 'Downgrade', default => null,
+        };
+        if ($item['operation'] === 'Update') $item['update_url'] = '#pm-release-action';
+        return $item;
+    }
+
+    public function marketplacePreview(array|string $params): Response
+    {
+        $this->authorize();
+        try {
+            $id = $this->id(is_array($params) ? ($params['storefront_id'] ?? null) : null);
+            $market = new Marketplace();
+            $detail = $market->get("/package/{$id}");
+            return Response::make(200)->asJson()->data(['video' => $market->artwork($detail)['video']])
+                ->header('Cache-Control', 'private, max-age=300');
+        } catch (InvalidArgumentException) {
+            return Response::make(400, 'Invalid storefront ID')->asJson();
+        } catch (Throwable $error) {
+            return Response::make($error->getCode() === 404 ? 404 : 502, 'Preview unavailable')->asJson();
+        }
+    }
+
+    public function installFromMarketplace(array|string $params): Redirect
+    {
+        $id = filter_var($_POST['storefront_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        $versionId = filter_var($_POST['release_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        $releasePage = filter_var($_POST['release_page'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: 1;
+        $destination = '/dashboard/packages/browse';
+        if ($id) $destination .= '?' . http_build_query(['package' => $id, 'release' => $versionId, 'page' => $releasePage]);
+        try {
+            $installedId = isset($_POST['installed_id']) ? $this->id($_POST['installed_id']) : null;
+            $installedVersion = is_string($_POST['installed_version'] ?? null) ? $_POST['installed_version'] : null;
+            $package = (new MarketplaceInstallation())->install(
+                $this->authorize(), $this->id($id), $this->id($versionId), ($_POST['confirmed'] ?? '') === '1',
+                $installedId, $installedVersion, ($_POST['downgrade_confirmed'] ?? '') === '1',
+            );
+            if ($installedId !== null) {
+                return $this->redirect($package->name . ' switched to version ' . $package->version . '.', 'success', $destination);
+            }
+            if ($package->status) return $this->redirect($package->name . ' installed and enabled.', 'success');
+            $_SESSION['packagemanager_enable'] = ['id' => $package->id, 'name' => $package->name];
+            return $this->redirect($package->name . ' installed successfully. Would you like to enable it?', 'success');
+        } catch (Throwable $error) {
+            return $this->redirect('Marketplace package action failed: ' . $error->getMessage(), 'error', $destination);
+        }
     }
 
     public function installFromDisk(array|string $params): View
@@ -109,7 +285,24 @@ final class PackageManagerController extends DashboardControllerBase
             if ($readme) $availableTabs[] = 'readme';
             if ($package->license || Packages::licenseUrl($package->license_url)) $availableTabs[] = 'license';
             $packageTab = in_array($_GET['tab'] ?? null, $availableTabs, true) ? $_GET['tab'] : 'overview';
-            return $this->page('show', 'Installed', compact('package', 'metadata', 'description', 'dependencies', 'readme', 'readmeError', 'packageTab'));
+            $marketplaceSource = MarketplacePackageRepository::find($id);
+            $marketplaceUpdate = $marketplaceUpdateError = null;
+            if ($marketplaceSource && ($_GET['check_update'] ?? null) === '1') {
+                try {
+                    $latest = Marketplace::fromSource($marketplaceSource)->latest((int) $marketplaceSource['storefront_id']);
+                    if (($latest['package_id'] ?? null) !== (int) $marketplaceSource['storefront_id']
+                        || ($latest['name'] ?? null) !== $package->name || !is_string($latest['version'] ?? null)) {
+                        throw new RuntimeException('Marketplace returned an unexpected release.');
+                    }
+                    $marketplaceUpdate = version_compare($latest['version'], $package->version, '>')
+                        ? 'Version ' . $latest['version'] . ' is available.' : 'You have the latest compatible stable version.';
+                } catch (Throwable $error) {
+                    $marketplaceUpdateError = $error->getCode() === 404
+                        ? 'No compatible stable release is currently available.' : $error->getMessage();
+                }
+            }
+            return $this->page('show', 'Installed', compact('package', 'metadata', 'description', 'dependencies', 'readme',
+                'readmeError', 'packageTab', 'marketplaceSource', 'marketplaceUpdate', 'marketplaceUpdateError'));
         } catch (Throwable $error) {
             return $this->redirect($error->getMessage(), 'error');
         }

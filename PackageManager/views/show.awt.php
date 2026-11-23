@@ -41,12 +41,22 @@
         </details>
         <section class="pm-description-section" aria-labelledby="pm-description-title">
             <h3 id="pm-description-title" class="h5">Description</h3>
-            <p class="theme-package-description">{{ $description ?: 'No description provided.' }}</p>
+            @include('partials/description.awt.php', ['descriptionHtml' => (new \PackageManager\service\PackageReadme())->description($description, $package) ?: '<p>No description provided</p>'])
         </section>
         @if($readmeError)
             <p class="alert alert-warning" role="status">{{ $readmeError }}</p>
         @endif
     </section>
+    @if($marketplaceSource)
+    <section class="card" aria-labelledby="pm-marketplace-source">
+        <h2 id="pm-marketplace-source" class="h3">Marketplace updates</h2>
+        @if($marketplaceUpdate)<p role="status">{{ $marketplaceUpdate }}</p>@endif
+        @if($marketplaceUpdateError)<p class="alert alert-warning" role="status">{{ $marketplaceUpdateError }}</p>@endif
+        <div class="form-actions">
+            <a class="btn btn-outline-primary" href="/dashboard/packages/{{ $package->id }}?check_update=1">Check for updates</a>
+        </div>
+    </section>
+    @endif
     <section class="card" aria-labelledby="pm-dependencies-title">
         <div class="page-heading"><h2 id="pm-dependencies-title" class="h3">Dependencies</h2></div>
         <p class="text-muted">Required packages and their current status on this site.</p>
@@ -79,25 +89,22 @@
         @if($package->system_package || $package->type === 0)
             <p class="text-muted">System packages are protected. They cannot be disabled or removed.</p>
         @else
-            <p class="text-muted">This package is currently {{ $package->status ? 'enabled' : 'disabled' }}. Changes take effect on the next request. Removing a package keeps its stored data and database tables.</p>
+            <p class="text-muted">Status changes take effect on the next request.</p>
         @endif
         <div class="form-actions">
-            @foreach(['enable' => 'Enable', 'disable' => 'Disable'] as $operation => $label)
+            @if(!$package->status || (!$package->system_package && $package->type !== 0))
                 <form method="post" action="/dashboard/packages/action">
                     @include('partials/token.awt.php')
                     <input type="hidden" name="package_id" value="{{ $package->id }}">
-                    <input type="hidden" name="operation" value="{{ $operation }}">
+                    <input type="hidden" name="operation" value="{{ $package->status ? 'disable' : 'enable' }}">
                     <input type="hidden" name="return_tab" value="{{ $packageTab }}">
-                    <button class="btn {{ $operation === 'enable' ? 'btn-primary' : 'btn-outline-secondary' }}" type="submit"
-                        @if(($operation === 'enable' && $package->status) || ($operation === 'disable' && (!$package->status || $package->system_package || $package->type === 0))) disabled @endif>
-                        <i class="fa-solid fa-power-off fa-fw" aria-hidden="true"></i> {{ $label }}
+                    <button class="btn {{ $package->status ? 'btn-outline-secondary' : 'btn-primary' }}" type="submit">
+                        <i class="fa-solid fa-power-off fa-fw" aria-hidden="true"></i> {{ $package->status ? 'Disable' : 'Enable' }}
                     </button>
                 </form>
-            @endforeach
+            @endif
             @if(!$package->system_package && $package->type !== 0)
                 <button class="btn btn-danger" type="button" data-open-dialog="pm-remove-dialog"><i class="fa-solid fa-trash fa-fw" aria-hidden="true"></i> Remove</button>
-            @else
-                <button class="btn btn-danger" type="button" disabled><i class="fa-solid fa-trash fa-fw" aria-hidden="true"></i> Remove</button>
             @endif
         </div>
     </section>

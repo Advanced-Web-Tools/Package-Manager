@@ -173,21 +173,92 @@ final class Packages
     {
         Access::actor($actor);
         if (!$confirmed) throw new \InvalidArgumentException('Confirm that you trust this package source before installing.');
-        return $this->locked(function () use ($actor, $path): InstalledPackage {
-            $manifest = null;
-            $audit = $this->log->begin($actor, 'Uploaded archive', 'install');
-            try {
-                $manifest = $this->archive->inspect($path);
-                if ($this->facade->getPackage($manifest['name'])) throw new \InvalidArgumentException('This package is already installed.');
-                $name = $this->archive->install($path);
-                $package = $this->facade->getPackage($name) ?? throw new \RuntimeException('Installation finished but the package record could not be read.');
-            } catch (\Throwable $error) {
-                $this->log->finish($audit, 'failed', $error->getMessage(), $manifest['name'] ?? null);
-                throw $error;
+        return $this->locked(fn() => $this->installArchive($actor, $path));
+    }
+
+    public function installMarketplace(Admin $actor, array $plan, ?InstalledPackage $expected = null, bool $downgradeConfirmed = false): InstalledPackage
+    {
+        Access::administrator($actor);
+        return $this->locked(function () use ($actor, $plan, $expected, $downgradeConfirmed): InstalledPackage {
+            $root = array_key_last($plan);
+            $current = $this->facade->getPackage($root);
+            if ($current?->id !== $expected?->id || $current?->version !== $expected?->version) {
+                throw new \RuntimeException('The installed version changed. Review the package again.');
             }
-            $this->log->finish($audit, 'success', $name . ' installed, disabled until enabled.', $name);
+            $action = 'install';
+            if ($current) {
+                $manifest = $plan[$root]['manifest'];
+                $action = $this->validateVersionChange($actor, $current, $manifest, $plan[$root]['source'], $downgradeConfirmed);
+            }
+            foreach ($plan as $entry) {
+                if (empty($entry['manifest']['system_package'])) continue;
+                foreach ($entry['manifest']['dependencies'] as $requirement) {
+                    $dependency = Dependency::fromArray($requirement);
+                    $installed = $this->facade->getPackage($dependency->name);
+                    $planned = $plan[$dependency->name]['manifest'] ?? [];
+                    $version = $installed ? ($installed->status ? $installed->version : null)
+                        : (!empty($planned['system_package']) ? $planned['version'] : null);
+                    if ($version === null || !Dependency::matchesVersion($version, $dependency->version)) {
+                        throw new \RuntimeException('Enable a compatible version of ' . $dependency->name . ' before applying ' . $entry['manifest']['name'] . '.');
+                    }
+                }
+            }
+            foreach ($plan as $name => $entry) {
+                if ($name !== $root && $this->facade->getPackage($name)) continue;
+                $package = $this->installArchive($actor, $entry['path'], $entry['source'], $name === $root ? $action : 'install');
+            }
             return $package;
         });
+    }
+
+    private function validateVersionChange(Admin $actor, InstalledPackage $current, array $manifest, array $source, bool $downgradeConfirmed): string
+    {
+        if ($current->type !== $manifest['type'] || $current->system_package !== !empty($manifest['system_package'])) {
+            throw new \RuntimeException('This installed package cannot change versions through Marketplace.');
+        }
+        $registered = MarketplacePackageRepository::find($current->id);
+        if ($registered && $registered['latest_url'] !== $source['latest_url']) {
+            throw new \RuntimeException('This package was installed from a different Marketplace storefront.');
+        }
+        $direction = version_compare($manifest['version'], $current->version);
+        if ($direction === 0) throw new \RuntimeException('This version is already installed.');
+        if ($direction < 0 && !$downgradeConfirmed) throw new \RuntimeException('Confirm the downgrade warning before continuing.');
+        foreach ($this->all($actor) as $candidate) {
+            foreach ($candidate->getDependencies() as $requirement) {
+                $dependency = Dependency::fromArray($requirement);
+                if ($dependency->name === $current->name && !Dependency::matchesVersion($manifest['version'], $dependency->version)) {
+                    throw new \RuntimeException($candidate->name . ' requires ' . $current->name . ' ' . $dependency->version . '.');
+                }
+            }
+        }
+        if ($current->status && !$current->system_package) {
+            foreach ($manifest['dependencies'] as $requirement) {
+                $dependency = Dependency::fromArray($requirement);
+                $installed = $this->facade->getPackage($dependency->name);
+                if (!$installed?->status || !Dependency::matchesVersion($installed->version, $dependency->version)) {
+                    throw new \RuntimeException('Enable a compatible version of ' . $dependency->name . ' before changing versions.');
+                }
+            }
+        }
+        return $direction > 0 ? 'update' : 'downgrade';
+    }
+
+    private function installArchive(Admin $actor, string $path, ?array $source = null, string $action = 'install'): InstalledPackage
+    {
+        $manifest = null;
+        $audit = $this->log->begin($actor, $source === null ? 'Uploaded archive' : 'Marketplace archive', $action);
+        try {
+            $manifest = $this->archive->inspect($path, $source !== null);
+            if ($action === 'install' && $this->facade->getPackage($manifest['name'])) throw new \InvalidArgumentException('This package is already installed.');
+            $name = $this->archive->install($path, $source, $action !== 'install');
+            $package = $this->facade->getPackage($name) ?? throw new \RuntimeException('Installation finished but the package record could not be read.');
+        } catch (\Throwable $error) {
+            $this->log->finish($audit, 'failed', $error->getMessage(), $manifest['name'] ?? null);
+            throw $error;
+        }
+        $message = $action === 'install' ? $name . ($package->status ? ' installed and enabled.' : ' installed, disabled until enabled.') : $name . ' switched to ' . $package->version . '.';
+        $this->log->finish($audit, 'success', $message, $name);
+        return $package;
     }
 
     private function locked(callable $operation): mixed

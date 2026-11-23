@@ -41,13 +41,30 @@ final class PackageReadme
                     require_once dirname(__DIR__) . '/vendor/parsedown/Parsedown.php';
                     $source = (new \PackageManager\vendor\parsedown\Parsedown())->text($source);
                 }
-                return ['filename' => $filename, 'html' => $this->sanitize($source, $package)];
+                return ['filename' => $filename, 'html' => $this->sanitize($source, fn(string $value, bool $image) => $this->url($value, $package, $image))];
             }
         }
         return null;
     }
 
-    private function sanitize(string $html, InstalledPackage $package): string
+    public function description(?string $description, ?InstalledPackage $package = null, ?Marketplace $marketplace = null, bool $excerpt = false): string
+    {
+        $description = trim($description ?? '');
+        if ($description === '') return '';
+        if (!preg_match('~</?[a-z][a-z0-9:-]*(?=\s|/?>)~i', $description)) {
+            $text = preg_replace('/&#(?:0*13|x0*d);/i', "\r", $description);
+            $text = str_replace(["\r\n", "\r"], "\n", html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            $paragraphs = preg_split('/\n(?:[ \t]*\n)+/', trim($text), -1, PREG_SPLIT_NO_EMPTY);
+            return implode('', array_map(static fn(string $part): string =>
+                '<p>' . nl2br(htmlspecialchars($part, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false) . '</p>', $paragraphs));
+        }
+        return $this->sanitize($description, function (string $value, bool $image) use ($package, $marketplace, $excerpt): ?string {
+            if ($excerpt || str_starts_with($value, '#')) return null;
+            return $package ? $this->url($value, $package, $image) : $marketplace?->media($value);
+        }, false, $excerpt);
+    }
+
+    private function sanitize(string $html, callable $resolveUrl, bool $readme = true, bool $excerpt = false): string
     {
         $source = new DOMDocument('1.0', 'UTF-8');
         $previous = libxml_use_internal_errors(true);
@@ -61,14 +78,14 @@ final class PackageReadme
         $container = $output->createElement('div');
         $output->appendChild($container);
         foreach ($source->getElementsByTagName('body') as $body) {
-            foreach ($body->childNodes as $child) $this->copy($child, $container, $output, $package, 0);
+            foreach ($body->childNodes as $child) $this->copy($child, $container, $output, $resolveUrl, $readme, $excerpt, 0);
         }
         $result = '';
         foreach ($container->childNodes as $node) $result .= $output->saveHTML($node);
         return $result;
     }
 
-    private function copy(DOMNode $source, DOMNode $parent, DOMDocument $output, InstalledPackage $package, int $depth): void
+    private function copy(DOMNode $source, DOMNode $parent, DOMDocument $output, callable $resolveUrl, bool $readme, bool $excerpt, int $depth): void
     {
         if ($depth > 100) return;
         if ($source->nodeType === XML_TEXT_NODE) {
@@ -79,17 +96,17 @@ final class PackageReadme
         $tag = strtolower($source->tagName);
         if (in_array($tag, self::DROP, true)) return;
         $target = $parent;
-        if (in_array($tag, self::TAGS, true)) {
+        if (in_array($tag, self::TAGS, true) && (!$excerpt || !in_array($tag, ['details', 'summary'], true))) {
             $target = $output->createElement($tag);
             $parent->appendChild($target);
             foreach (['title', 'alt'] as $attribute) {
                 if ($source->hasAttribute($attribute)) $target->setAttribute($attribute, $source->getAttribute($attribute));
             }
             // Preserve README anchor navigation without exposing arbitrary CSS or handlers.
-            if (preg_match('/^[a-zA-Z][a-zA-Z0-9_-]{0,100}$/', $source->getAttribute('id'))) {
+            if ($readme && preg_match('/^[a-zA-Z][a-zA-Z0-9_-]{0,100}$/', $source->getAttribute('id'))) {
                 $target->setAttribute('id', 'pm-readme-content-' . $source->getAttribute('id'));
             }
-            if (preg_match('/^h[1-6]$/', $tag) && !$target->hasAttribute('id')) {
+            if ($readme && preg_match('/^h[1-6]$/', $tag) && !$target->hasAttribute('id')) {
                 $slug = trim(preg_replace('/[^\p{L}\p{N}_-]+/u', '-', strtolower(trim($source->textContent))), '-');
                 if ($slug !== '') $target->setAttribute('id', 'pm-readme-content-' . $slug);
             }
@@ -97,12 +114,16 @@ final class PackageReadme
                 $target->setAttribute('class', 'pm-readme-align-' . $source->getAttribute('align'));
             }
             if ($tag === 'a') {
-                $url = $this->url($source->getAttribute('href'), $package, false);
+                $url = $resolveUrl($source->getAttribute('href'), false);
                 if ($url !== null) $target->setAttribute('href', $url);
                 $target->setAttribute('rel', 'noopener noreferrer');
             }
             if ($tag === 'img') {
-                $url = $this->url($source->getAttribute('src'), $package, true);
+                $url = $resolveUrl($source->getAttribute('src'), true);
+                if ($url === null && !$readme) {
+                    $parent->removeChild($target);
+                    return;
+                }
                 if ($url !== null) $target->setAttribute('src', $url);
                 $target->setAttribute('loading', 'lazy');
                 $target->setAttribute('referrerpolicy', 'no-referrer');
@@ -113,7 +134,7 @@ final class PackageReadme
             if ($tag === 'ol' && preg_match('/^[0-9]{1,6}$/', $source->getAttribute('start'))) $target->setAttribute('start', $source->getAttribute('start'));
             if ($tag === 'details' && $source->hasAttribute('open')) $target->setAttribute('open', '');
         }
-        foreach ($source->childNodes as $child) $this->copy($child, $target, $output, $package, $depth + 1);
+        foreach ($source->childNodes as $child) $this->copy($child, $target, $output, $resolveUrl, $readme, $excerpt, $depth + 1);
     }
 
     private function url(string $value, InstalledPackage $package, bool $image): ?string

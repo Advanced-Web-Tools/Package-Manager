@@ -5,22 +5,59 @@
         if (!dialog || typeof dialog.showModal !== 'function') return;
         openers.set(dialog, opener || document.activeElement);
         dialog.showModal();
+        const confirmDowngrade = dialog.querySelector('[name="downgrade_confirmed"]');
+        if (confirmDowngrade) confirmDowngrade.disabled = false;
     };
     document.querySelectorAll('[data-open-dialog]').forEach(button => {
         button.addEventListener('click', () => {
+            if (button.dataset.openDialog === 'pm-downgrade-dialog' && !button.form.reportValidity()) return;
             show(document.getElementById(button.dataset.openDialog), button);
         });
     });
     document.querySelectorAll('dialog').forEach(dialog => {
         dialog.querySelectorAll('[data-close-dialog]').forEach(button => button.addEventListener('click', () => dialog.close()));
         dialog.addEventListener('close', () => {
+            const confirmDowngrade = dialog.querySelector('[name="downgrade_confirmed"]');
+            if (confirmDowngrade) confirmDowngrade.disabled = true;
             if (dialog.id === 'pm-enable-dialog') {
                 window.location.assign('/dashboard/packages');
                 return;
             }
             openers.get(dialog)?.focus();
         });
-        if (dialog.hasAttribute('data-auto-open')) show(dialog);
+        if (dialog.hasAttribute('data-auto-open')) {
+            show(dialog);
+            const fallback = document.getElementById('pm-enable-fallback');
+            if (dialog.open && fallback) fallback.hidden = true;
+        }
+    });
+    document.querySelectorAll('.pm-market-gallery').forEach(gallery => {
+        const dialog = gallery.querySelector('.pm-gallery-viewer');
+        if (!dialog || typeof dialog.showModal !== 'function') return;
+        const links = Array.from(gallery.querySelectorAll('[data-gallery-image]'));
+        const image = dialog.querySelector('img');
+        const position = dialog.querySelector('[data-gallery-position]');
+        let current = 0;
+        const display = index => {
+            current = (index + links.length) % links.length;
+            image.src = links[current].href;
+            image.alt = links[current].querySelector('img').alt;
+            position.textContent = links.length > 1 ? (current + 1) + ' / ' + links.length : '';
+        };
+        links.forEach((link, index) => link.addEventListener('click', event => {
+            if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            display(index);
+            show(dialog, link);
+        }));
+        dialog.querySelectorAll('[data-gallery-step]').forEach(button => {
+            button.addEventListener('click', () => display(current + Number(button.dataset.galleryStep)));
+        });
+        dialog.addEventListener('keydown', event => {
+            if (links.length < 2 || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+            event.preventDefault();
+            display(current + (event.key === 'ArrowRight' ? 1 : -1));
+        });
     });
     const input = document.getElementById('pm-archive');
     const clear = document.getElementById('pm-clear');
@@ -61,6 +98,88 @@
         image.addEventListener('error', fallback);
         if (image.complete && !image.naturalWidth) fallback();
     });
+    document.querySelectorAll('video[data-market-preview], video[data-hover-preview]').forEach(video => {
+        video.muted = true;
+        video.addEventListener('volumechange', () => { if (!video.muted) video.muted = true; });
+    });
+    const previews = document.querySelectorAll('video[data-market-preview]');
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const cardPreviewUrls = new Map();
+    document.querySelectorAll('video[data-hover-preview]').forEach(video => {
+        const card = video.closest('.pm-market-card');
+        let timer;
+        let hover = 0;
+        const stop = () => {
+            hover++;
+            window.clearTimeout(timer);
+            video.pause();
+            video.classList.remove('is-playing');
+        };
+        video.addEventListener('playing', () => {
+            if (!video.paused) video.classList.add('is-playing');
+        });
+        video.addEventListener('error', stop);
+        card.addEventListener('pointerenter', event => {
+            if (event.pointerType === 'touch' || reducedMotion.matches || document.hidden) return;
+            const request = ++hover;
+            timer = window.setTimeout(async () => {
+                try {
+                    const id = video.dataset.hoverPreview;
+                    if (!cardPreviewUrls.has(id)) {
+                        const url = video.dataset.previewUrl;
+                        cardPreviewUrls.set(id, url ? Promise.resolve(url) :
+                            fetch('/dashboard/packages/browse/preview/' + encodeURIComponent(id))
+                                .then(response => {
+                                    if (!response.ok) throw new Error('Preview unavailable');
+                                    return response.json();
+                                })
+                                .then(payload => payload.data?.video ?? null)
+                                .catch(() => { cardPreviewUrls.delete(id); return null; }));
+                    }
+                    const url = await cardPreviewUrls.get(id);
+                    if (!url || request !== hover || reducedMotion.matches || document.hidden) return;
+                    if (!video.getAttribute('src')) video.src = url;
+                    await video.play();
+                } catch {
+                    if (request === hover) stop();
+                }
+            }, 1000);
+        });
+        card.addEventListener('pointerleave', stop);
+        card.addEventListener('pointercancel', stop);
+        reducedMotion.addEventListener('change', () => { if (reducedMotion.matches) stop(); });
+        document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
+    });
+    const visible = new Set();
+    let observer;
+    if ('IntersectionObserver' in window) {
+        observer = new IntersectionObserver(entries => {
+            entries.forEach(({ target, isIntersecting, intersectionRatio }) => {
+                if (isIntersecting && intersectionRatio >= 0.5) {
+                    visible.add(target);
+                    if (!reducedMotion.matches && !document.hidden) target.play().catch(() => {});
+                } else {
+                    visible.delete(target);
+                    target.pause();
+                }
+            });
+        }, { threshold: 0.5 });
+    }
+    previews.forEach(video => {
+        observer?.observe(video);
+        video.addEventListener('error', () => {
+            observer?.unobserve(video);
+            visible.delete(video);
+            video.hidden = true;
+            video.nextElementSibling.hidden = false;
+        }, { once: true });
+    });
+    reducedMotion.addEventListener('change', () => {
+        if (reducedMotion.matches) visible.forEach(video => video.pause());
+    });
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) visible.forEach(video => video.pause());
+    });
     document.querySelectorAll('.pm-page form[method="post"]').forEach(form => {
         form.addEventListener('submit', () => {
             // Delay disabling until the browser has constructed the request data.
@@ -69,7 +188,8 @@
                 const labels = {
                     '/dashboard/packages/install/review': 'Reading manifest…',
                     '/dashboard/packages/install/dependencies': 'Preparing dependencies…',
-                    '/dashboard/packages/install': 'Installing packages…'
+                    '/dashboard/packages/install': 'Installing packages…',
+                    '/dashboard/packages/browse/install': 'Applying release…'
                 };
                 form.querySelectorAll('button[type="submit"]').forEach(button => {
                     button.disabled = true;

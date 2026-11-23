@@ -9,8 +9,8 @@ final class PackageManagerRouter extends RuntimeRouterAPI
     {
         $controller = $this->getPassable('PackageManager', 'PackageManagerControllerAPI')->getController('PackageManagerController');
         foreach ([
-            ['', 'index', 'GET'], ['/browse', 'browse', 'GET'], ['/help', 'help', 'GET'],
-            ['/install-from-disk', 'installFromDisk', 'GET'],
+            ['', 'index', 'GET'], ['/browse', 'browse', 'GET'], ['/browse/preview/{storefront_id}', 'marketplacePreview', 'GET'], ['/help', 'help', 'GET'],
+            ['/install-from-disk', 'installFromDisk', 'GET'], ['/browse/install', 'installFromMarketplace', 'POST'],
             ['/install/review', 'reviewInstallation', 'POST'], ['/install/dependencies', 'prepareDependencies', 'POST'],
             ['/install/cancel', 'cancelInstallation', 'POST'], ['/logs', 'logs', 'GET'], ['/install', 'install', 'POST'], ['/action', 'action', 'POST'],
             ['/{package_id}', 'show', 'GET'],
