@@ -1,7 +1,4 @@
-<article class="card pm-market-overview">
-    <div class="pm-market-hero-art">
-        @include('partials/marketplace-cover.awt.php', ['item' => $profile, 'mediaClass' => 'pm-market-preview'])
-    </div>
+<article class="pm-market-overview">
     <div class="pm-market-overview-copy">
         <div class="theme-heading">
             <div class="avatar-tile theme-icon-large">
@@ -24,10 +21,15 @@
             </div>
         @endif
     </div>
+    @if($profile['video'] || $profile['cover'] !== '/awt_packages/PackageManager/views/assets/images/default_preview.webp')
+        <div class="pm-market-hero-art">
+            @include('partials/marketplace-cover.awt.php', ['item' => $profile, 'mediaClass' => 'pm-market-preview'])
+        </div>
+    @endif
 </article>
 @include('partials/marketplace-gallery.awt.php', ['gallery' => $profile['gallery'] ?? null])
 @if(!empty($profile['description_markup']) || !empty($profile['description']))
-    <section class="card" aria-labelledby="pm-profile-description">
+    <section class="pm-section" aria-labelledby="pm-profile-description">
         <h2 id="pm-profile-description" class="h3">About</h2>
         @include('partials/description.awt.php', ['descriptionHtml' => $profile['description_markup'] ?? (new \PackageManager\service\PackageReadme())->description($profile['description'])])
     </section>
@@ -52,12 +54,12 @@
 <section aria-labelledby="pm-owner-packages">
     <div class="pm-market-section-heading"><h2 class="h3" id="pm-owner-packages">Packages</h2></div>
     @if($profile['items'])
-        <div class="card-grid pm-market-grid">
+        <div class="pm-market-grid">
             @foreach($profile['items'] as $item)
                 @include('partials/marketplace-card.awt.php', ['item' => $item])
             @endforeach
         </div>
     @else
-        <div class="card empty-state"><p>No compatible packages on this page</p></div>
+        <div class="pm-empty"><p>No compatible packages on this page</p></div>
     @endif
 </section>

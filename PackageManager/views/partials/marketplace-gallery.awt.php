@@ -1,6 +1,6 @@
 @if($gallery)
     <section class="pm-market-gallery" aria-labelledby="pm-gallery-title">
-        <div class="pm-market-section-heading"><h2 class="h3" id="pm-gallery-title">{{ $gallery['name'] ?: 'Gallery' }}</h2></div>
+        <div class="pm-market-section-heading"><h2 class="h3" id="pm-gallery-title">Gallery</h2></div>
         @include('partials/description.awt.php', ['descriptionHtml' => $gallery['description_markup']])
         <div class="pm-market-gallery-grid">
             @foreach($gallery['items'] as $index => $media)
@@ -16,7 +16,7 @@
         @if(in_array('image', array_column($gallery['items'], 'type'), true))
             <dialog class="pm-dialog pm-gallery-viewer" aria-labelledby="pm-gallery-viewer-title">
                 <header class="pm-gallery-viewer-header">
-                    <h2 id="pm-gallery-viewer-title" class="h5">{{ $gallery['name'] ?: 'Gallery' }}</h2>
+                    <h2 id="pm-gallery-viewer-title" class="h5">Gallery</h2>
                     <span class="text-small text-muted" data-gallery-position aria-live="polite"></span>
                     <button class="btn btn-ghost" type="button" data-close-dialog autofocus>Close</button>
                 </header>

@@ -1,4 +1,4 @@
-<article class="card pm-market-card">
+<article class="pm-market-card">
     <div class="pm-market-card-cover">
         <img class="pm-market-media" src="{{ $item['cover'] }}" data-image-fallback="/awt_packages/PackageManager/views/assets/images/default_preview.webp" alt="" loading="lazy">
         <video class="pm-market-media pm-market-card-video" muted loop playsinline preload="none" aria-hidden="true"

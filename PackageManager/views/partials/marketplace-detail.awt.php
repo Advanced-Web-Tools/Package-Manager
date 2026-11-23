@@ -1,7 +1,4 @@
-<article class="card pm-market-overview pm-market-package">
-    <div class="pm-market-hero-art">
-        @include('partials/marketplace-cover.awt.php', ['item' => $item, 'mediaClass' => 'pm-market-preview'])
-    </div>
+<article class="pm-market-overview pm-market-package">
     <div class="pm-market-overview-copy">
         <div class="pm-market-package-heading">
             <div class="theme-heading">
@@ -13,14 +10,14 @@
                     <p class="pm-market-publisher text-muted">Published by <a href="{{ $item['owner_url'] }}">{{ $item['publisher'] ?? ucfirst($item['owner']['type']) }}</a></p>
                     <div class="pm-market-tags">
                         @foreach($item['tags'] as $tag)
-                            <a class="badge badge-muted" href="/dashboard/packages/browse?tag={{ $tag['id'] }}">{{ $tag['name'] }}</a>
+                            <a class="text-small" href="/dashboard/packages/browse?tag={{ $tag['id'] }}">{{ $tag['name'] }}</a>
                         @endforeach
                     </div>
                 </div>
             </div>
             <div class="pm-market-heading-actions">
                 @if($item['installed'])
-                    <button class="btn btn-outline-secondary pm-market-installed" type="button" disabled>Installed</button>
+                    <a class="btn btn-outline-secondary" href="/dashboard/packages/{{ $item['installed']->id }}">Manage installed package</a>
                     @if(!empty($item['update_url']))
                         <a class="btn btn-primary" href="{{ $item['update_url'] }}">Update</a>
                     @endif
@@ -38,14 +35,19 @@
             </div>
         </dl>
     </div>
+    @if($item['video'] || $item['cover'] !== '/awt_packages/PackageManager/views/assets/images/default_preview.webp')
+        <div class="pm-market-hero-art">
+            @include('partials/marketplace-cover.awt.php', ['item' => $item, 'mediaClass' => 'pm-market-preview'])
+        </div>
+    @endif
 </article>
 @include('partials/marketplace-gallery.awt.php', ['gallery' => $item['gallery'] ?? null])
-<section class="card" aria-labelledby="pm-market-description">
+<section class="pm-section" aria-labelledby="pm-market-description">
     <h2 id="pm-market-description" class="h3">Description</h2>
     @include('partials/description.awt.php', ['descriptionHtml' => $item['description_markup'] ?? (new \PackageManager\service\PackageReadme())->description($item['description']) ?: '<p>No description provided</p>'])
 </section>
 
-<section class="card pm-market-release" aria-labelledby="pm-release-title">
+<section class="pm-market-release" aria-labelledby="pm-release-title">
     <div class="page-heading"><h2 class="h3" id="pm-release-title">Versions</h2></div>
     @if($item['versions'])
         <form method="get" action="/dashboard/packages/browse#pm-release-title" class="pm-filters pm-market-version-picker">
@@ -67,9 +69,6 @@
                     <div>
                         <dt>Installed</dt>
                         <dd>{{ $item['installed']->version ?? 'None' }}</dd>
-                        @if($item['installed'])
-                            <dd><a class="text-small" href="/dashboard/packages/{{ $item['installed']->id }}">Manage package</a></dd>
-                        @endif
                     </div>
                     <div><dt>Selected release</dt><dd>{{ $item['selected']['version'] }}</dd></div>
                 </dl>
@@ -134,9 +133,6 @@
         </div>
     @else
         <p class="text-muted mb-0">No compatible releases on this page</p>
-        @if($item['installed'])
-            <a href="/dashboard/packages/{{ $item['installed']->id }}">Manage installed package</a>
-        @endif
     @endif
     @if($item['previous'] || $item['next'])
         <nav class="pm-log-pagination" aria-label="Version pages">
