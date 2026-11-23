@@ -37,11 +37,11 @@
         @elseif(count($packages) === 0)
             <div class="card empty-state"><h3 class="h4">No packages match</h3><p>Try another search or select a different package type.</p><a class="btn btn-outline-secondary" href="/dashboard/packages">Clear filters</a></div>
         @else
-            <div class="card-grid pm-market-grid">
+            <ul class="pm-installed-list">
                 @foreach($packages as $item)
-                    @include('partials/card.awt.php', ['item' => $item])
+                    @include('partials/installed-row.awt.php', ['item' => $item])
                 @endforeach
-            </div>
+            </ul>
         @endif
     </section>
 </div>

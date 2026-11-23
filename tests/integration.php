@@ -524,8 +524,10 @@ foreach ($views as $view => $data) {
     }
     if ($view === 'index') {
         check(!str_contains($html, 'id="pm-upload-form"'), 'Installed page no longer includes ZIP installer');
-        check(str_contains($html, 'class="pm-market-media" src="/awt_packages/PackageManager/views/assets/images/default_preview.webp"'),
-            'Installed cards render the supplied default artwork for missing previews');
+        check(str_contains($html, 'class="pm-installed-row"')
+            && str_contains($html, 'href="/dashboard/packages/' . $package->id . '"')
+            && str_contains($html, 'data-image-fallback="/awt_packages/PackageManager/views/assets/images/default_icon.webp"'),
+            'Installed rows link to package details and provide fallback icons');
     }
     if ($view === 'install') {
         check(str_contains($html, 'id="pm-upload-form"') && str_contains($html, 'Installation steps'), 'Install page contains file picker and guidance');
