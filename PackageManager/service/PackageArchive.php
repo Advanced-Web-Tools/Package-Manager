@@ -28,7 +28,7 @@ final class PackageArchive
     }
 
     /** Validate before the framework extracts or executes anything. */
-    public function inspect(string $path): array
+    public function inspect(string $path, bool $fromMarketplace = false): array
     {
         $size = is_file($path) ? filesize($path) : false;
         if (!$size || $size > self::MAX_BYTES) throw new \InvalidArgumentException('Choose a nonempty ZIP file up to 50 MB.');
@@ -59,37 +59,45 @@ final class PackageArchive
                 throw new \InvalidArgumentException('manifest.json and main.php must be directly at the ZIP root.');
             }
             $manifest = ManifestReader::validate(json_decode($json, true, 512, JSON_THROW_ON_ERROR));
-            // Uploaded system packages would be automatically enabled by the framework.
-            if (!empty($manifest['system_package']) || $manifest['type'] === 0) {
+            // Marketplace confirms that system packages are enabled immediately.
+            if ($manifest['type'] === 0 || (!$fromMarketplace && !empty($manifest['system_package']))) {
                 throw new \InvalidArgumentException('System packages must be installed through the trusted server deployment process.');
             }
             return $manifest;
         } finally { $zip->close(); }
     }
 
-    public function install(string $path): string
+    public function install(string $path, ?array $marketplaceSource = null, bool $replace = false): string
     {
-        $manifest = $this->inspect($path);
+        $manifest = $this->inspect($path, $marketplaceSource !== null);
         $destination = rtrim(PACKAGES, '/') . '/' . str_replace(' ', '', $manifest['name']);
-        if (file_exists($destination) || is_link($destination)) {
-            throw new \InvalidArgumentException('A package directory with this name already exists. Resolve it before installing.');
+        if (is_link($destination) || ($replace ? !is_dir($destination) : file_exists($destination))) {
+            throw new \InvalidArgumentException('The package directory does not match the requested installation action.');
         }
         // Archives stay in the framework's private transient VFS, never public storage.
         $pool = (new TransientStorage())->setPool('temp')->setSubPool('PackageManager');
         $content = file_get_contents($path);
         if ($content === false) throw new \RuntimeException('Unable to read the package upload.');
         $entry = $pool->createFile(bin2hex(random_bytes(16)), ETransientType::ARCHIVE, $content);
+        $repository = $marketplaceSource === null ? new PackageRepository() : new MarketplacePackageRepository($marketplaceSource);
+        $mover = $replace ? new PackageVersionMover('', PACKAGES) : new PackageMover('', PACKAGES);
         try {
             $extractor = new Extractor(new ZipArchive(), $entry, dirname($entry->getPath()) . '/extract-');
             $installer = new PackageInstaller(
-                $extractor, new PackageMover('', PACKAGES),
+                $extractor, $mover,
                 new PackageStorageTreeGenerator(new LocalFileSystemService(), new StorageRepository()),
-                new PackageRepository(),
+                $repository,
             );
-            if (!$installer->install()) throw new \RuntimeException('The framework rejected the package structure or manifest.');
+            if (!($replace ? $installer->update() : $installer->install())) throw new \RuntimeException('The framework rejected the package structure or manifest.');
             return $manifest['name'];
         } finally {
-            if (!$entry->delete()) error_log('PackageManager: unable to delete temporary archive.');
+            try {
+                if ($mover instanceof PackageVersionMover) {
+                    $mover->finish(($repository->getPackage($manifest['name'])['version'] ?? null) === $manifest['version']);
+                }
+            } finally {
+                if (!$entry->delete()) error_log('PackageManager: unable to delete temporary archive.');
+            }
         }
     }
 }

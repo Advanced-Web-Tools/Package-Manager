@@ -5,14 +5,13 @@
     <div class="pm-directory-heading">
         <div>
             <h1 class="h2">Install from disk</h1>
-            <p class="text-muted">Add a package to your site in a few steps.</p>
+            <p class="text-muted">Upload an AWT package ZIP and review its dependencies</p>
         </div>
-        <a class="btn btn-outline-secondary" href="/dashboard/packages"><i class="fa-solid fa-arrow-left fa-fw" aria-hidden="true"></i> Back to packages</a>
     </div>
     <ol class="pm-install-steps" aria-label="Installation steps">
-        <li><div><strong>Choose a ZIP</strong><span class="text-small text-muted">Select a package from your computer.</span></div></li>
-        <li><div><strong>Review and install</strong><span class="text-small text-muted">Read the manifest, resolve dependencies and confirm installation.</span></div></li>
-        <li><div><strong>Enable when ready</strong><span class="text-small text-muted">New packages start disabled. You decide when to enable them.</span></div></li>
+        <li><div><strong>Choose a ZIP</strong><span class="text-small text-muted">Upload from your computer.</span></div></li>
+        <li><div><strong>Review and install</strong><span class="text-small text-muted">Check the manifest and resolve any missing dependencies.</span></div></li>
+        <li><div><strong>Enable when ready</strong><span class="text-small text-muted">Enable the package from Installed when you’re ready.</span></div></li>
     </ol>
     @if($installation)
         @include('partials/installation-review.awt.php')

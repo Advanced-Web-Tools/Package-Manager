@@ -2,16 +2,22 @@
 <link rel="stylesheet" href="/awt_packages/PackageManager/views/assets/css/main.css">
 <script src="/awt_packages/PackageManager/views/assets/js/packages.js" defer></script>
 <div class="pm-page">
-    <header class="navbar border-bottom">
+    <header class="navbar border-bottom pm-header">
         <div class="container">
-            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
+            <div class="pm-header-bar">
                 <div class="navbar-brand">Packages</div>
-                <a class="btn btn-ghost" href="/dashboard/packages/help"><i class="fa-solid fa-circle-question fa-fw" aria-hidden="true"></i> Help</a>
+                <a class="btn btn-ghost" href="/dashboard/packages/help" @if($tab === 'Help') aria-current="page" @endif><i class="fa-solid fa-circle-question fa-fw" aria-hidden="true"></i> Help</a>
             </div>
+            <nav class="nav-tabs pm-main-tabs" aria-label="Package pages">
+                <a href="/dashboard/packages" class="{{ $tab === 'Installed' ? 'active' : '' }}" @if($tab === 'Installed') aria-current="page" @endif><i class="fa-solid fa-cubes fa-fw" aria-hidden="true"></i> Installed</a>
+                <a href="/dashboard/packages/browse" class="{{ $tab === 'Browse' ? 'active' : '' }}" @if($tab === 'Browse') aria-current="page" @endif><i class="fa-solid fa-compass fa-fw" aria-hidden="true"></i> Browse</a>
+                <a href="/dashboard/packages/install-from-disk" class="{{ $tab === 'Install from disk' ? 'active' : '' }}" @if($tab === 'Install from disk') aria-current="page" @endif><i class="fa-solid fa-upload fa-fw" aria-hidden="true"></i> Install from disk</a>
+                <a href="/dashboard/packages/logs" class="{{ $tab === 'Logs' ? 'active' : '' }}" @if($tab === 'Logs') aria-current="page" @endif><i class="fa-solid fa-clock-rotate-left fa-fw" aria-hidden="true"></i> Logs</a>
+            </nav>
             @if($package)
                 <div class="theme-hero">
                     <div class="theme-hero-content">
-                        <a class="theme-back" href="/dashboard/packages"><i class="fa-solid fa-arrow-left fa-fw" aria-hidden="true"></i> Back to packages</a>
+                        <a class="theme-back" href="/dashboard/packages"><i class="fa-solid fa-arrow-left fa-fw" aria-hidden="true"></i> Installed packages</a>
                         <div class="theme-heading">
                             <div class="avatar-tile theme-icon-large" aria-hidden="true">
                                 <img src="{{ \PackageManager\service\Packages::image($package, 'icon') }}" data-image-fallback="/awt_packages/PackageManager/views/assets/images/default_icon.webp" alt="">
@@ -35,16 +41,10 @@
                     <a href="/dashboard/packages/{{ $package->id }}?tab=license" class="{{ $packageTab === 'license' ? 'active' : '' }}" @if($packageTab === 'license') aria-current="page" @endif><i class="fa-solid fa-scale-balanced fa-fw" aria-hidden="true"></i> License</a>
                 @endif
             </nav>
-            @else
-            <nav class="nav-tabs" aria-label="Package pages">
-                <a href="/dashboard/packages" class="{{ $tab === 'Installed' ? 'active' : '' }}" @if($tab === 'Installed') aria-current="page" @endif><i class="fa-solid fa-cubes fa-fw" aria-hidden="true"></i> Installed</a>
-                <a href="/dashboard/packages/browse" class="{{ $tab === 'Browse' ? 'active' : '' }}" @if($tab === 'Browse') aria-current="page" @endif><i class="fa-solid fa-compass fa-fw" aria-hidden="true"></i> Browse</a>
-                <a href="/dashboard/packages/install-from-disk" class="{{ $tab === 'Install from disk' ? 'active' : '' }}" @if($tab === 'Install from disk') aria-current="page" @endif><i class="fa-solid fa-upload fa-fw" aria-hidden="true"></i> Install from disk</a>
-            </nav>
             @endif
         </div>
     </header>
-    <section class="container py-5" aria-label="Package management">
+    <section class="container pm-content" aria-label="Package management">
         @if($notice)
             <div class="alert {{ $notice['kind'] === 'error' ? 'alert-danger' : 'alert-success' }}" role="{{ $notice['kind'] === 'error' ? 'alert' : 'status' }}">{{ $notice['message'] }}</div>
         @endif

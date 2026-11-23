@@ -1,5 +1,5 @@
 @if($enablePrompt)
-    <section class="card mb-4" aria-labelledby="pm-enable-inline-title">
+    <section class="card" id="pm-enable-fallback" aria-labelledby="pm-enable-inline-title">
         <h2 id="pm-enable-inline-title" class="h4">Enable {{ $enablePrompt['name'] }}?</h2>
         <p>The package was installed successfully and is currently disabled.</p>
         <div class="form-actions">

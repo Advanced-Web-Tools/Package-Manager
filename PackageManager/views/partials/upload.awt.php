@@ -1,6 +1,5 @@
 <section class="card pm-install-panel" id="pm-install-package" aria-labelledby="pm-install-title-inline">
-    <div class="page-heading"><h2 class="h3" id="pm-install-title-inline"><i class="fa-solid fa-file-zipper fa-fw" aria-hidden="true"></i> Choose a package ZIP</h2></div>
-    <p class="text-muted">Select the ZIP you downloaded from a trusted package publisher.</p>
+    <div class="page-heading"><h2 class="h3" id="pm-install-title-inline">Package archive</h2></div>
     <form action="/dashboard/packages/install/review" method="post" enctype="multipart/form-data" id="pm-upload-form">
         @include('partials/token.awt.php')
         <div class="pm-upload">
@@ -18,8 +17,8 @@
                 </div>
                 <p id="pm-upload-error" class="pm-upload-error text-small" role="alert" hidden></p>
             </div>
-            <button class="btn btn-primary pm-review-install" type="submit" id="pm-install" disabled aria-describedby="pm-install-next">Review installation <i class="fa-solid fa-arrow-right fa-fw" aria-hidden="true"></i></button>
-            <p class="text-small text-muted pm-install-next" id="pm-install-next">Choose a ZIP to check its manifest and dependencies. Nothing is installed yet.</p>
+            <button class="btn btn-primary pm-review-install" type="submit" id="pm-install" aria-describedby="pm-install-next">Review installation <i class="fa-solid fa-arrow-right fa-fw" aria-hidden="true"></i></button>
+            <p class="text-small text-muted pm-install-next" id="pm-install-next">Review shows the manifest and dependencies before installation.</p>
         </div>
         <noscript><p>Choose a ZIP and submit it to read its manifest and check dependencies before installation.</p></noscript>
     </form>
