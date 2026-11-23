@@ -7,8 +7,8 @@
   "type": 1,
   "system_package": 1,
   "description": "Install, inspect and manage AWT packages with administrator controls and an audit trail.",
-  "icon": "/data/icon/icon.webp",
-  "preview_image": "/data/preview/preview.png",
+  "icon": "data/icon/icon.webp",
+  "preview_image": "data/preview/preview.png",
   "license": "MIT",
   "license_url": null,
   "dependencies": [
