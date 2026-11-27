@@ -9,11 +9,11 @@ use PDO;
 
 class ActionLog
 {
-    public function begin(Admin $actor, string $package, string $action): int
+    public function begin(?Admin $actor, string $package, string $action): int
     {
-        $name = Access::actor($actor);
+        $name = $actor === null ? 'AWT automation' : Access::actor($actor);
         $id = (new DatabaseManager())->table('packagemanager_log')->insert([
-            'account_id' => $actor->getKey(), 'account_name' => $name,
+            'account_id' => $actor?->getKey(), 'account_name' => $name,
             'package_name' => $package, 'action' => $action, 'outcome' => 'pending',
             'message' => 'Action started.', 'created_at' => gmdate('Y-m-d H:i:s'),
         ])->executeInsert();

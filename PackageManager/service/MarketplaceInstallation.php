@@ -4,6 +4,7 @@ namespace PackageManager\service;
 
 use admin\Admin;
 use package\dependency\Dependency;
+use package\facade\PackageFacade;
 use package\manifest\reader\ManifestReader;
 use package\model\InstalledPackage;
 use RuntimeException;
@@ -34,16 +35,54 @@ final class MarketplaceInstallation
     ): InstalledPackage {
         Access::administrator($actor);
         if (!$confirmed) throw new RuntimeException('Confirm that you trust this package and its Marketplace dependencies.');
+        $release = $this->marketplace->get("/package/{$id}/versions/{$versionId}");
+        $this->verifyRelease($release, $id, $versionId);
+        $installed = $this->packages->all($actor);
+        $current = array_column($installed, null, 'name')[$release['name']] ?? null;
+        if ($current?->id !== $installedId || $current?->version !== $installedVersion) {
+            throw new RuntimeException('The installed version changed. Review the package again.');
+        }
+        return $this->apply($release, $installed, $current, $actor, $downgradeConfirmed);
+    }
+
+    public function connect(Admin $actor, int $installedId, string $installedVersion, int $id, int $versionId, bool $matchAuthor = false): bool
+    {
+        Access::administrator($actor);
+        $entry = $this->marketplace->get("/package/manifest/{$id}", ['version_id' => $versionId]);
+        $this->verifyRelease($entry, $id, $versionId);
+        return $this->packages->connectMarketplace(
+            $actor, $installedId, $installedVersion, $this->validateManifest($entry, $entry), $this->marketplace->source($id, $versionId), $matchAuthor,
+        );
+    }
+
+    public function update(InstalledPackage $package, int $id, ?Admin $actor = null): ?InstalledPackage
+    {
+        if ($actor !== null) Access::administrator($actor);
         try {
-            foreach ($this->packages->all($actor) as $package) $this->installed[$package->name] = $package;
-            $release = $this->marketplace->get("/package/{$id}/versions/{$versionId}");
-            $this->verifyRelease($release, $id, $versionId);
-            $current = $this->installed[$release['name']] ?? null;
-            if ($current?->id !== $installedId || $current?->version !== $installedVersion) {
-                throw new RuntimeException('The installed version changed. Review the package again.');
-            }
+            $latest = $this->marketplace->latestForPackage($id, $package->name);
+        } catch (RuntimeException $error) {
+            if ($error->getCode() === 404) return null;
+            throw $error;
+        }
+        if (version_compare($latest['version'], $package->version, '<=')) return null;
+
+        $versionId = $latest['id'];
+        $release = $this->marketplace->get("/package/{$id}/versions/{$versionId}");
+        $this->verifyRelease($release, $id, $versionId);
+        if ($release['name'] !== $package->name || $release['version'] !== $latest['version']) {
+            throw new RuntimeException('The Marketplace release changed while checking for updates.');
+        }
+        return $this->apply($release, (new PackageFacade())->getInstalled(), $package, $actor);
+    }
+
+    private function apply(array $release, array $installed, ?InstalledPackage $current, ?Admin $actor, bool $downgradeConfirmed = false): InstalledPackage
+    {
+        try {
+            $this->installed = array_column($installed, null, 'name');
             $this->prepare($release, $current !== null);
-            return $this->packages->installMarketplace($actor, $this->plan, $current, $downgradeConfirmed);
+            return $actor === null
+                ? $this->packages->updateFromAutomation($this->plan, $current)
+                : $this->packages->installMarketplace($actor, $this->plan, $current, $downgradeConfirmed);
         } finally {
             foreach ($this->files as $path) unlink($path);
             $this->files = $this->plan = $this->installed = $this->visiting = $this->destinations = [];
@@ -69,12 +108,7 @@ final class MarketplaceInstallation
 
         $entry = $this->marketplace->get("/package/manifest/{$id}", ['version_id' => $versionId]);
         $this->verifyRelease($entry, $id, $versionId);
-        $manifest = ManifestReader::validate($entry['manifest'] ?? null);
-        if ($manifest['name'] !== $name || $manifest['version'] !== $release['version']
-            || $manifest['type'] === 0) {
-            throw new RuntimeException('Marketplace returned an unexpected or unsupported manifest for ' . $name . '.');
-        }
-        $this->checkCompatibility($manifest);
+        $manifest = $this->validateManifest($entry, $release);
 
         $directoryName = str_replace(' ', '', $name);
         if (isset($this->destinations[strtolower($directoryName)])
@@ -128,6 +162,16 @@ final class MarketplaceInstallation
             throw new RuntimeException('The selected Marketplace release is unavailable or changed. Refresh Browse and try again.');
         }
         $this->checkCompatibility($release);
+    }
+
+    private function validateManifest(array $entry, array $release): array
+    {
+        $manifest = ManifestReader::validate($entry['manifest'] ?? null);
+        if ($manifest['name'] !== $release['name'] || $manifest['version'] !== $release['version'] || $manifest['type'] === 0) {
+            throw new RuntimeException('Marketplace returned an unexpected or unsupported manifest for ' . $release['name'] . '.');
+        }
+        $this->checkCompatibility($manifest);
+        return $manifest;
     }
 
     private function checkCompatibility(array $data): void

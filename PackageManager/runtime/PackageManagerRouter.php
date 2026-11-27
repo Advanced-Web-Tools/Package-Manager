@@ -11,6 +11,8 @@ final class PackageManagerRouter extends RuntimeRouterAPI
         foreach ([
             ['', 'index', 'GET'], ['/browse', 'browse', 'GET'], ['/browse/preview/{storefront_id}', 'marketplacePreview', 'GET'], ['/help', 'help', 'GET'],
             ['/install-from-disk', 'installFromDisk', 'GET'], ['/browse/install', 'installFromMarketplace', 'POST'],
+            ['/browse/connect', 'connectMarketplace', 'POST'],
+            ['/updates', 'updates', 'GET'], ['/updates/run', 'runUpdates', 'POST'],
             ['/install/review', 'reviewInstallation', 'POST'], ['/install/dependencies', 'prepareDependencies', 'POST'],
             ['/install/cancel', 'cancelInstallation', 'POST'], ['/logs', 'logs', 'GET'], ['/install', 'install', 'POST'], ['/action', 'action', 'POST'],
             ['/{package_id}', 'show', 'GET'],

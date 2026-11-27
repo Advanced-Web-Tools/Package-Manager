@@ -43,7 +43,7 @@ PackageManager fits naturally into the AWT dashboard, with light and dark themes
 
 ## Start with your next package
 
-PackageManager is built for administrators using **AWT 27 or later**, with **Dashboard** and **URPC** installed.
+PackageManager is built for administrators using **AWT 27.2.0 or later**, with **Dashboard** and **URPC** installed.
 
 Once PackageManager is set up, open **Dashboard → Packages** to explore your installed tools. To add something new:
 
@@ -51,6 +51,14 @@ Once PackageManager is set up, open **Dashboard → Packages** to explore your i
 2. Review the package and prepare any missing requirements from trusted sources, where available.
 3. Confirm installation, then enable the required packages and your new addition when you’re ready.
 
-Use **Browse** to search the Marketplace and install compatible packages directly on your server. Open a Marketplace package under **Installed** to check for a newer compatible release. Set the server environment variable `AWT_MARKETPLACE_ORIGIN` to use a different Marketplace deployment.
+Use **Browse** to search the Marketplace and install compatible packages directly on your server. For packages installed elsewhere, open **Installed → package overview → Find a storefront**, choose the matching storefront in **Browse**, then select **Connect installed package**. The overview can then check the connected storefront for updates. Set `AWT_MARKETPLACE_ORIGIN` on the server to browse a different Marketplace deployment.
+
+## Automatic updates
+
+Open **Packages → Updates** to connect packages with matching Marketplace storefronts, update all connected packages, or run the framework updater on demand.
+
+In Settings Manager, open **Package Manager** and enable **Auto update packages**, **Auto update framework**, or both. Both settings start disabled. Package updates use the latest compatible stable release from each connected storefront. Framework updates use AWT's built-in updater.
+
+Run `php /path/to/awt/awt automation run` every minute from the server's cron to dispatch AWT jobs. Both update jobs are due on the hour every two hours in AWT's PHP timezone. Run cron as the account with write access to the AWT installation.
 
 <p align="center"><strong>Know what powers your site. Choose what comes next.</strong></p>

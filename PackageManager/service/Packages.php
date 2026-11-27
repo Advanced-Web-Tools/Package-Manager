@@ -179,6 +179,50 @@ final class Packages
     public function installMarketplace(Admin $actor, array $plan, ?InstalledPackage $expected = null, bool $downgradeConfirmed = false): InstalledPackage
     {
         Access::administrator($actor);
+        return $this->applyMarketplace($actor, $plan, $expected, $downgradeConfirmed);
+    }
+
+    public function updateFromAutomation(array $plan, InstalledPackage $expected): InstalledPackage
+    {
+        return $this->applyMarketplace(null, $plan, $expected, false);
+    }
+
+    public function connectMarketplace(Admin $actor, int $id, string $expectedVersion, array $manifest, array $source, bool $matchAuthor = false): bool
+    {
+        Access::administrator($actor);
+        return $this->locked(function () use ($actor, $id, $expectedVersion, $manifest, $source, $matchAuthor): bool {
+            $current = $this->find($actor, $id);
+            if ($current->version !== $expectedVersion) {
+                throw new \RuntimeException('The installed version changed. Review the package again.');
+            }
+            if ($current->type === 0 || $current->name !== $manifest['name'] || $current->type !== $manifest['type']
+                || $current->system_package !== !empty($manifest['system_package'])) {
+                throw new \RuntimeException('The selected storefront release does not match the installed package.');
+            }
+            if ($matchAuthor && (trim($current->author ?? '') === '' || $current->author !== ($manifest['author'] ?? null))) {
+                throw new \RuntimeException('The storefront release author does not match the installed package.');
+            }
+            $registered = MarketplacePackageRepository::find($id);
+            if ($registered) {
+                if ($registered['latest_url'] !== $source['latest_url']) {
+                    throw new \RuntimeException('This package is already connected to a different Marketplace storefront.');
+                }
+                return false;
+            }
+            $audit = $this->log->begin($actor, $current->name, 'connect');
+            try {
+                (new MarketplacePackageRepository($source))->insertSource($id);
+            } catch (\Throwable $error) {
+                $this->log->finish($audit, 'failed', $error->getMessage());
+                throw $error;
+            }
+            $this->log->finish($audit, 'success', 'Connected to Marketplace storefront ' . $source['storefront_id'] . '.');
+            return true;
+        });
+    }
+
+    private function applyMarketplace(?Admin $actor, array $plan, ?InstalledPackage $expected, bool $downgradeConfirmed): InstalledPackage
+    {
         return $this->locked(function () use ($actor, $plan, $expected, $downgradeConfirmed): InstalledPackage {
             $root = array_key_last($plan);
             $current = $this->facade->getPackage($root);
@@ -188,7 +232,15 @@ final class Packages
             $action = 'install';
             if ($current) {
                 $manifest = $plan[$root]['manifest'];
-                $action = $this->validateVersionChange($actor, $current, $manifest, $plan[$root]['source'], $downgradeConfirmed);
+                $source = $plan[$root]['source'];
+                $registered = MarketplacePackageRepository::find($current->id);
+                if ($registered && $registered['latest_url'] !== $source['latest_url']) {
+                    throw new \RuntimeException('This package was installed from a different Marketplace storefront.');
+                }
+                if ($actor === null && $registered === null) {
+                    throw new \RuntimeException('The installed package is no longer connected to Marketplace.');
+                }
+                $action = $this->validateVersionChange($current, $manifest, $downgradeConfirmed);
             }
             foreach ($plan as $entry) {
                 if (empty($entry['manifest']['system_package'])) continue;
@@ -211,19 +263,15 @@ final class Packages
         });
     }
 
-    private function validateVersionChange(Admin $actor, InstalledPackage $current, array $manifest, array $source, bool $downgradeConfirmed): string
+    private function validateVersionChange(InstalledPackage $current, array $manifest, bool $downgradeConfirmed): string
     {
         if ($current->type !== $manifest['type'] || $current->system_package !== !empty($manifest['system_package'])) {
             throw new \RuntimeException('This installed package cannot change versions through Marketplace.');
         }
-        $registered = MarketplacePackageRepository::find($current->id);
-        if ($registered && $registered['latest_url'] !== $source['latest_url']) {
-            throw new \RuntimeException('This package was installed from a different Marketplace storefront.');
-        }
         $direction = version_compare($manifest['version'], $current->version);
         if ($direction === 0) throw new \RuntimeException('This version is already installed.');
         if ($direction < 0 && !$downgradeConfirmed) throw new \RuntimeException('Confirm the downgrade warning before continuing.');
-        foreach ($this->all($actor) as $candidate) {
+        foreach ($this->facade->getInstalled() as $candidate) {
             foreach ($candidate->getDependencies() as $requirement) {
                 $dependency = Dependency::fromArray($requirement);
                 if ($dependency->name === $current->name && !Dependency::matchesVersion($manifest['version'], $dependency->version)) {
@@ -243,7 +291,7 @@ final class Packages
         return $direction > 0 ? 'update' : 'downgrade';
     }
 
-    private function installArchive(Admin $actor, string $path, ?array $source = null, string $action = 'install'): InstalledPackage
+    private function installArchive(?Admin $actor, string $path, ?array $source = null, string $action = 'install'): InstalledPackage
     {
         $manifest = null;
         $audit = $this->log->begin($actor, $source === null ? 'Uploaded archive' : 'Marketplace archive', $action);
