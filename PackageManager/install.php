@@ -3,6 +3,7 @@
 use installer\interfaces\package\actions\IPostInstall;
 use PackageManager\migrations\CreatePackageLog;
 use PackageManager\migrations\CreateMarketplaceSources;
+use PackageManager\service\UpdateSettings;
 
 final class PackageManagerInstall implements IPostInstall
 {
@@ -10,6 +11,7 @@ final class PackageManagerInstall implements IPostInstall
     {
         CreatePackageLog::up($packageId);
         CreateMarketplaceSources::up($packageId);
+        UpdateSettings::register($packageId);
         return true;
     }
 }

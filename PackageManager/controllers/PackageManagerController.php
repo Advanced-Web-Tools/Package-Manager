@@ -4,9 +4,11 @@ use admin\Admin;
 use Dashboard\api\page\DashboardControllerBase;
 use PackageManager\service\Access;
 use PackageManager\service\ActionLog;
+use PackageManager\service\FrameworkUpdates;
 use PackageManager\service\PackageArchive;
 use PackageManager\service\Packages;
 use PackageManager\service\PackageReadme;
+use PackageManager\service\PackageUpdates;
 use PackageManager\service\InstallationPlan;
 use PackageManager\service\Marketplace;
 use PackageManager\service\MarketplaceInstallation;
@@ -45,6 +47,7 @@ final class PackageManagerController extends DashboardControllerBase
     public ?array $marketplaceSource;
     public ?string $marketplaceUpdate;
     public ?string $marketplaceUpdateError;
+    public array $updateFailures;
 
     public function __construct()
     {
@@ -187,6 +190,7 @@ final class PackageManagerController extends DashboardControllerBase
         }
         $item['manifest'] = [];
         $item['operation'] = null;
+        $item['can_connect'] = false;
         $item['installed'] = $installed[$selected['name'] ?? $item['release']['name'] ?? $item['latest_stable']['name'] ?? ''] ?? null;
         if (!$selected) return $item;
 
@@ -200,6 +204,7 @@ final class PackageManagerController extends DashboardControllerBase
         }
         $source = MarketplacePackageRepository::find($current->id);
         if ($manifest['type'] !== $current->type || $current->system_package !== !empty($manifest['system_package']) || ($source && $source['latest_url'] !== $market->source($id, $selected['id'])['latest_url'])) return $item;
+        $item['can_connect'] = $source === null && $manifest['name'] === $current->name;
         $latest = $item['release'];
         if ($latest && $latest['name'] === $current->name && version_compare($latest['version'], $current->version, '>')) {
             $item['update_url'] = $base . '#pm-release-action';
@@ -252,6 +257,24 @@ final class PackageManagerController extends DashboardControllerBase
         }
     }
 
+    public function connectMarketplace(array|string $params): Redirect
+    {
+        $actor = $this->authorize();
+        $destination = '/dashboard/packages/browse';
+        try {
+            $storefrontId = $this->id($_POST['storefront_id'] ?? null);
+            $releaseId = $this->id($_POST['release_id'] ?? null);
+            $destination .= '?' . http_build_query(['package' => $storefrontId, 'release' => $releaseId]);
+            $installedId = $this->id($_POST['installed_id'] ?? null);
+            $installedVersion = $_POST['installed_version'] ?? null;
+            if (!is_string($installedVersion)) throw new InvalidArgumentException('Review the installed package before connecting it.');
+            (new MarketplaceInstallation())->connect($actor, $installedId, $installedVersion, $storefrontId, $releaseId);
+            return $this->redirect('Installed package connected to the Marketplace storefront.', 'success', '/dashboard/packages/' . $installedId);
+        } catch (Throwable $error) {
+            return $this->redirect($error->getMessage(), 'error', $destination);
+        }
+    }
+
     public function installFromDisk(array|string $params): View
     {
         try { $installation = (new InstallationPlan())->review($this->authorize()); }
@@ -289,11 +312,7 @@ final class PackageManagerController extends DashboardControllerBase
             $marketplaceUpdate = $marketplaceUpdateError = null;
             if ($marketplaceSource && ($_GET['check_update'] ?? null) === '1') {
                 try {
-                    $latest = Marketplace::fromSource($marketplaceSource)->latest((int) $marketplaceSource['storefront_id']);
-                    if (($latest['package_id'] ?? null) !== (int) $marketplaceSource['storefront_id']
-                        || ($latest['name'] ?? null) !== $package->name || !is_string($latest['version'] ?? null)) {
-                        throw new RuntimeException('Marketplace returned an unexpected release.');
-                    }
+                    $latest = Marketplace::fromSource($marketplaceSource)->latestForPackage((int) $marketplaceSource['storefront_id'], $package->name);
                     $marketplaceUpdate = version_compare($latest['version'], $package->version, '>')
                         ? 'Version ' . $latest['version'] . ' is available.' : 'You have the latest compatible stable version.';
                 } catch (Throwable $error) {
@@ -314,6 +333,38 @@ final class PackageManagerController extends DashboardControllerBase
         $page = filter_var($_GET['page'] ?? 1, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 1000000]]) ?: 1;
         $entries = (new ActionLog())->history($actor, $page);
         return $this->page('logs', 'Logs', ['entries' => array_slice($entries, 0, 25), 'logPage' => $page, 'hasMore' => count($entries) > 25]);
+    }
+
+    public function updates(array|string $params): View
+    {
+        $updateFailures = $_SESSION['packagemanager_update_failures'] ?? [];
+        unset($_SESSION['packagemanager_update_failures']);
+        return $this->page('updates', 'Updates', compact('updateFailures'));
+    }
+
+    public function runUpdates(array|string $params): Redirect
+    {
+        $actor = $this->authorize();
+        $destination = '/dashboard/packages/updates';
+        unset($_SESSION['packagemanager_update_failures']);
+        try {
+            $operation = $_POST['operation'] ?? null;
+            if ($operation === 'update-framework') {
+                return $this->redirect((new FrameworkUpdates())->run($actor), 'success', $destination);
+            }
+            $updates = new PackageUpdates();
+            [$result, $verb] = match ($operation) {
+                'connect-all' => [$updates->connectAll($actor), 'connected'],
+                'update-all' => [$updates->updateAll($actor), 'updated'],
+                default => throw new InvalidArgumentException('Choose a valid update action.'),
+            };
+            $failed = count($result['failures']);
+            $_SESSION['packagemanager_update_failures'] = $result['failures'];
+            $message = sprintf('%d %s, %d unchanged, %d need attention.', $result['changed'], $verb, $result['skipped'], $failed);
+            return $this->redirect($message, $failed ? 'error' : 'success', $destination);
+        } catch (Throwable $error) {
+            return $this->redirect($error->getMessage(), 'error', $destination);
+        }
     }
 
     public function action(array|string $params): Redirect

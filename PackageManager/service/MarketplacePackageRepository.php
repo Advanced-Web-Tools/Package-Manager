@@ -35,12 +35,24 @@ final class MarketplacePackageRepository extends PackageRepository
 
     private function saveSource(int $id): void
     {
-        $sql = self::find($id)
-            ? 'UPDATE packagemanager_marketplace SET storefront_id = :storefront_id, release_id = :release_id,
-                latest_url = :latest_url, download_url = :download_url WHERE package_id = :package_id'
-            : 'INSERT INTO packagemanager_marketplace (package_id, storefront_id, release_id, latest_url, download_url)
-                VALUES (:package_id, :storefront_id, :release_id, :latest_url, :download_url)';
-        (new DatabaseProvider())->execute($sql, ['package_id' => $id] + $this->source)->closeCursor();
+        if (!self::find($id)) {
+            $this->insertSource($id);
+            return;
+        }
+        (new DatabaseProvider())->execute(
+            'UPDATE packagemanager_marketplace SET storefront_id = :storefront_id, release_id = :release_id,
+                latest_url = :latest_url, download_url = :download_url WHERE package_id = :package_id',
+            ['package_id' => $id] + $this->source,
+        )->closeCursor();
+    }
+
+    public function insertSource(int $id): void
+    {
+        (new DatabaseProvider())->execute(
+            'INSERT INTO packagemanager_marketplace (package_id, storefront_id, release_id, latest_url, download_url)
+                VALUES (:package_id, :storefront_id, :release_id, :latest_url, :download_url)',
+            ['package_id' => $id] + $this->source,
+        )->closeCursor();
     }
 
     public static function find(int $id): ?array

@@ -12,6 +12,7 @@
                 <a href="/dashboard/packages" class="{{ $tab === 'Installed' ? 'active' : '' }}" @if($tab === 'Installed') aria-current="page" @endif><i class="fa-solid fa-cubes fa-fw" aria-hidden="true"></i> Installed</a>
                 <a href="/dashboard/packages/browse" class="{{ $tab === 'Browse' ? 'active' : '' }}" @if($tab === 'Browse') aria-current="page" @endif><i class="fa-solid fa-compass fa-fw" aria-hidden="true"></i> Browse</a>
                 <a href="/dashboard/packages/install-from-disk" class="{{ $tab === 'Install from disk' ? 'active' : '' }}" @if($tab === 'Install from disk') aria-current="page" @endif><i class="fa-solid fa-upload fa-fw" aria-hidden="true"></i> Install from disk</a>
+                <a href="/dashboard/packages/updates" class="{{ $tab === 'Updates' ? 'active' : '' }}" @if($tab === 'Updates') aria-current="page" @endif><i class="fa-solid fa-arrows-rotate fa-fw" aria-hidden="true"></i> Updates</a>
                 <a href="/dashboard/packages/logs" class="{{ $tab === 'Logs' ? 'active' : '' }}" @if($tab === 'Logs') aria-current="page" @endif><i class="fa-solid fa-clock-rotate-left fa-fw" aria-hidden="true"></i> Logs</a>
             </nav>
             @if($package)

@@ -72,6 +72,17 @@
                     </div>
                     <div><dt>Selected release</dt><dd>{{ $item['selected']['version'] }}</dd></div>
                 </dl>
+                @if(!empty($item['can_connect']))
+                    <form action="/dashboard/packages/browse/connect" method="post" class="pm-market-install">
+                        @include('partials/token.awt.php')
+                        <input type="hidden" name="storefront_id" value="{{ $item['id'] }}">
+                        <input type="hidden" name="release_id" value="{{ $item['selected']['id'] }}">
+                        <input type="hidden" name="installed_id" value="{{ $item['installed']->id }}">
+                        <input type="hidden" name="installed_version" value="{{ $item['installed']->version }}">
+                        <p class="text-muted">Use this trusted storefront for future updates. The installed version stays in place.</p>
+                        <button class="btn btn-outline-primary" type="submit">Connect installed package</button>
+                    </form>
+                @endif
                 @if($item['operation'])
                     @if(!empty($item['manifest']['system_package']) && !$item['installed'])
                         <p class="text-muted">AWT enables this system package immediately after installation.</p>

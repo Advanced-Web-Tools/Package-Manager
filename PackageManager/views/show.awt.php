@@ -47,14 +47,22 @@
             <p class="alert alert-warning" role="status">{{ $readmeError }}</p>
         @endif
     </section>
-    @if($marketplaceSource)
+    @if($package->type !== 0)
     <section class="card" aria-labelledby="pm-marketplace-source">
         <h2 id="pm-marketplace-source" class="h3">Marketplace updates</h2>
+        @if($marketplaceSource)
+        <p class="text-muted">Connected to Marketplace storefront #{{ $marketplaceSource['storefront_id'] }}.</p>
         @if($marketplaceUpdate)<p role="status">{{ $marketplaceUpdate }}</p>@endif
         @if($marketplaceUpdateError)<p class="alert alert-warning" role="status">{{ $marketplaceUpdateError }}</p>@endif
         <div class="form-actions">
             <a class="btn btn-outline-primary" href="/dashboard/packages/{{ $package->id }}?check_update=1">Check for updates</a>
         </div>
+        @else
+        <p class="text-muted">Connect this package to a trusted Marketplace storefront to receive updates.</p>
+        <div class="form-actions">
+            <a class="btn btn-outline-primary" href="/dashboard/packages/browse?q={{ rawurlencode($package->name) }}">Find a storefront</a>
+        </div>
+        @endif
     </section>
     @endif
     <section class="card" aria-labelledby="pm-dependencies-title">

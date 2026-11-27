@@ -12,14 +12,15 @@ mkdir($temporary);
 define('ROOT', $temporary . '/');
 define('CONFIG', ROOT);
 define('DATA', ROOT . 'data/');
+define('FRAMEWORK_STORAGE', DATA . 'storage/framework/');
 define('PACKAGES', ROOT . 'packages/');
 define('PACKAGE_STORAGE', ROOT . 'package-storage/');
 define('COMPILED', ROOT . 'compiled/');
 define('HOSTNAME', 'http://localhost');
 define('WEB_NAME', 'AWT test');
-define('AWT_VERSION', '27.0.0');
+define('AWT_VERSION', '27.2.0');
 define('DEBUG', true);
-foreach ([DATA, PACKAGES, PACKAGE_STORAGE, COMPILED] as $path) mkdir($path, 0755, true);
+foreach ([FRAMEWORK_STORAGE, PACKAGES, PACKAGE_STORAGE, COMPILED] as $path) mkdir($path, 0755, true);
 file_put_contents(CONFIG . 'awt_db.php', "<?php const DB_TYPE = 'sqlite'; const DB_NAME = ':memory:';");
 require_once CONFIG . 'awt_db.php';
 function removeTree(string $path): void {
@@ -383,8 +384,16 @@ $marketRelease = ['id' => 19, 'package_id' => 14, 'name' => 'MarketRoot', 'versi
     'minimum_awt_version' => $base['minimum_awt_version'], 'maximum_awt_version' => null, 'published_at' => '2026-10-01'];
 $marketNewRelease = array_replace($marketRelease, ['id' => 21, 'version' => '2.0.0']);
 $dependencyRelease = array_replace($marketRelease, ['id' => 20, 'package_id' => 15, 'name' => 'MarketDependency']);
+$otherDependencyRelease = array_replace($dependencyRelease, ['id' => 22, 'package_id' => 16]);
+$otherAuthorRelease = array_replace($marketRelease, ['id' => 23, 'package_id' => 17, 'name' => 'Example']);
 $marketDependencies = ['dependencies' => [['name' => 'MarketDependency', 'constraint' => '*', 'ambiguous' => false, 'resolved' => $dependencyRelease]]];
+$storefront = static fn(array $release): array => ['id' => $release['package_id'], 'name' => 'Storefront title',
+    'latest_compatible_stable' => $release];
 $transport = new class ([
+    $marketPrefix . '/package/search?awt_current_version=27.2.0&page=1' => ['items' => [$storefront($dependencyRelease), $storefront($otherAuthorRelease)], 'per_page' => 2, 'total' => 4],
+    $marketPrefix . '/package/search?awt_current_version=27.2.0&page=2' => ['items' => [$storefront($marketNewRelease), $storefront($otherDependencyRelease)], 'per_page' => 2, 'total' => 4],
+    $marketPrefix . '/package/manifest/17?version_id=23' => $otherAuthorRelease + ['manifest' => array_replace($base, ['author' => 'Different publisher'])],
+    $marketPrefix . '/package/14/latest?awt_current_version=27.2.0' => $marketNewRelease,
     $marketPrefix . '/package/14/versions/18' => $marketRelease + $marketDependencies,
     $marketPrefix . '/package/14/versions/19' => $marketRelease + $marketDependencies,
     $marketPrefix . '/package/14/versions/21' => $marketNewRelease + $marketDependencies,
@@ -427,6 +436,87 @@ foreach ([[$marketPackage, 14, 19], [$marketDepPackage, 15, 20]] as [$installedM
     $service->change($actor, $installedMarketPackage->id, 'remove');
     check(PackageManager\service\MarketplacePackageRepository::find($installedMarketPackage->id) === null, 'Removing a package removes its source');
 }
+$marketDepPackage = $service->install($actor, ROOT . 'market-dependency.zip', true);
+$localMarketPackage = $service->install($actor, ROOT . 'market-root.zip', true);
+rejects(fn() => $marketInstall->connect($actor, $localMarketPackage->id, '2.0.0', 14, 19), 'installed version changed');
+rejects(fn() => $marketInstall->connect($actor, $localMarketPackage->id, '1.0.0', 15, 20), 'does not match');
+rejects(fn() => $marketInstall->update($localMarketPackage, 14), 'no longer connected');
+$marketInstall->connect($actor, $localMarketPackage->id, '1.0.0', 14, 21);
+check($facade->getPackage('MarketRoot')->version === '1.0.0' && !is_file(PACKAGES . 'MarketRoot/new-only.php'),
+    'Connecting a storefront leaves the local version and files in place');
+unset($_SESSION['admin']);
+$automaticUpdate = $marketInstall->update($localMarketPackage, 14);
+check($automaticUpdate?->id === $localMarketPackage->id && $automaticUpdate->version === '2.0.0'
+    && !$automaticUpdate->status && is_file(PACKAGES . 'MarketRoot/new-only.php'), 'Automation updates a connected package without an admin session');
+check($marketInstall->update($automaticUpdate, 14) === null, 'Automation skips a current release');
+$_SESSION['admin'] = ['id' => 1, 'token' => 'test-token'];
+$latestAction = (new PackageManager\service\ActionLog())->history($actor)[0];
+check($latestAction['account_name'] === 'AWT automation' && $latestAction['action'] === 'update'
+    && $latestAction['outcome'] === 'success', 'Automatic updates are audited under AWT automation');
+$service->change($actor, $automaticUpdate->id, 'remove');
+$localMarketPackage = $service->install($actor, ROOT . 'market-root.zip', true);
+$bulkUpdates = new PackageManager\service\PackageUpdates($transport);
+$previousOrigin = getenv('AWT_MARKETPLACE_ORIGIN');
+putenv('AWT_MARKETPLACE_ORIGIN=' . $marketOrigin);
+try {
+    $connections = $bulkUpdates->connectAll($actor);
+} finally {
+    putenv($previousOrigin === false ? 'AWT_MARKETPLACE_ORIGIN' : 'AWT_MARKETPLACE_ORIGIN=' . $previousOrigin);
+}
+check($connections['changed'] === 1 && count($connections['failures']) === 2
+    && str_contains(implode(' ', $connections['failures']), 'Multiple storefronts match')
+    && str_contains(implode(' ', $connections['failures']), 'author does not match'),
+    'Bulk connect scans all pages and skips ambiguous and different-author storefronts');
+check($facade->getPackage('MarketRoot')->version === '1.0.0'
+    && PackageManager\service\MarketplacePackageRepository::find($marketDepPackage->id) === null,
+    'Bulk connect leaves installed versions in place and ambiguous packages unconnected');
+$batch = $bulkUpdates->updateAll($actor);
+$latestAction = (new PackageManager\service\ActionLog())->history($actor)[0];
+check($batch['changed'] === 1 && $batch['failures'] === []
+    && $facade->getPackage('MarketRoot')->version === '2.0.0' && $latestAction['account_name'] === 'administrator',
+    'Manual bulk updates use the connected storefront and are audited under the administrator');
+check($bulkUpdates->updateAll($actor)['changed'] === 0, 'Manual bulk updates skip a current release');
+$service->change($actor, $localMarketPackage->id, 'remove');
+$service->change($actor, $marketDepPackage->id, 'remove');
+
+$frameworkRoot = ROOT . 'framework-fixture';
+mkdir($frameworkRoot);
+$releases = new class extends installer\framework\FrameworkReleaseSource {
+    public function latestTag(): string { return '27.3.0'; }
+    public function tree(string $tag): array { return []; }
+};
+$frameworkUpdates = new PackageManager\service\FrameworkUpdates(
+    new installer\framework\FrameworkUpdater($frameworkRoot, FRAMEWORK_STORAGE . 'framework-test.lock', $releases),
+);
+$frameworkResult = $frameworkUpdates->run($actor);
+$latestAction = (new PackageManager\service\ActionLog())->history($actor)[0];
+check(str_contains($frameworkResult, 'Updated AWT from 27.2.0 to 27.3.0')
+    && trim(file_get_contents($frameworkRoot . '/.awt-version')) === '27.3.0'
+    && $latestAction['package_name'] === 'AWT' && $latestAction['account_name'] === 'administrator',
+    'Manual framework update uses the AWT updater and records the administrator');
+
+$settings = PackageManager\service\UpdateSettings::class;
+$provider->execute('CREATE TABLE awt_setting (id INTEGER PRIMARY KEY, package_id INTEGER, name TEXT, value TEXT,
+    value_type TEXT, category TEXT, required_permission_level INTEGER)')->closeCursor();
+$settingsPackage = $facade->getRepository()->newPackage(array_replace($base, ['name' => 'PackageManager']));
+$settings::register($settingsPackage);
+$settings::register($settingsPackage);
+$rows = $provider->execute('SELECT name, value, value_type, category FROM awt_setting ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
+check($rows === array_map(fn($name) => ['name' => $name, 'value' => 'false', 'value_type' => 'boolean', 'category' => 'Package Manager'],
+    [$settings::PACKAGES, $settings::FRAMEWORK]), 'Both automatic update settings are separate, boolean and disabled by default');
+(new setting\Settings())->fetchSettings()->initSettings();
+foreach ([new PackageManager\automation\UpdatePackages(), new PackageManager\automation\UpdateFramework()] as $job) {
+    $schedule = new automation\CronSchedule($job->on());
+    check($schedule->isDue(new DateTimeImmutable('2026-11-28 02:00:00'))
+        && $schedule->isDue(new DateTimeImmutable('2026-11-28 04:00:00'))
+        && !$schedule->isDue(new DateTimeImmutable('2026-11-28 03:00:00')), $job->name() . ' runs every two hours');
+    $job->run();
+}
+setting\Config::getConfig('PackageManager', $settings::PACKAGES)->setValue('true');
+$settings::register($settingsPackage);
+check($settings::enabled($settings::PACKAGES) && !$settings::enabled($settings::FRAMEWORK)
+    && $provider->execute("SELECT value FROM awt_setting WHERE name = 'Auto update packages'")->fetchColumn() === 'true',
+    'Re-registering settings preserves administrator choices');
 $marketGallery = $market->gallery(['name' => 'Publisher screenshots', 'description' => '', 'items' => [
     ['type' => 'image', 'url' => '/storefront/14/album/files/4'],
     ['type' => 'video', 'url' => '/storefront/14/album/files/5'],
@@ -458,11 +548,12 @@ $views = [
         'sort' => 'name', 'section' => '', 'tags' => [], 'tag' => '', 'search' => '', 'detail' => null,
         'error' => null, 'page' => 1, 'previous' => null, 'next' => null,
     ]], 'help' => ['tab' => 'Help'],
+    'updates' => ['tab' => 'Updates', 'updateFailures' => ['Example needs attention.']],
     'logs' => ['tab' => 'Logs', 'entries' => $history, 'logPage' => 1, 'hasMore' => true],
     'show' => ['package' => $package, 'metadata' => $metadata, 'readme' => $readme, 'readmeError' => null, 'description' => '<p><strong>Rich description</strong></p>' . $base['description'], 'dependencies' => $service->dependencies($actor, $dependencyPackage)],
 ];
 foreach ($views as $view => $data) {
-    $blade = new render\TemplateEngine\BladeOne(dirname(__DIR__) . '/PackageManager/views', COMPILED, render\TemplateEngine\BladeOne::MODE_SLOW);
+    $blade = new render\TemplateEngine\AWTBlade(dirname(__DIR__) . '/PackageManager/views', COMPILED, render\TemplateEngine\AWTBlade::MODE_SLOW);
     $blade->setFileExtension('.awt.php');
     $blade->setPackageName('PackageManager');
     $blade->addAssetDict(0, '/awt_packages/PackageManager/views/assets');
@@ -497,6 +588,7 @@ foreach ($views as $view => $data) {
     }
     if ($view === 'browse') {
         $detailBundle['marketplaceBrowse']['detail']['installed'] = $marketUpdated;
+        $detailBundle['marketplaceBrowse']['detail']['can_connect'] = true;
         $detailBundle['marketplaceBrowse']['detail']['operation'] = 'Downgrade';
         $detailBundle['marketplaceBrowse']['detail']['update_url'] = '#pm-release-action';
         $downgradeHtml = $blade->run('browse', $detailBundle);
@@ -506,6 +598,8 @@ foreach ($views as $view => $data) {
         check(str_contains($downgradeHtml, 'href="/dashboard/packages/' . $marketUpdated->id . '">Manage installed package</a>')
             && str_contains($downgradeHtml, 'href="#pm-release-action">Update</a>'),
             'Installed Marketplace package offers management and update actions');
+        check(str_contains($downgradeHtml, 'action="/dashboard/packages/browse/connect"') && str_contains($downgradeHtml, 'Connect installed package'),
+            'An installed package can be connected to a matching Marketplace storefront from Browse');
         foreach (['creator', 'organization'] as $type) {
             $profileBundle = array_replace($common, $data);
             $profileBundle['marketplaceBrowse']['profile'] = ['type' => $type, 'name' => ucfirst($type) . ' profile', 'description' => 'Profile description',
@@ -550,6 +644,13 @@ foreach ($views as $view => $data) {
     check($xpath->query('//header[contains(@class,"navbar")]//nav[@aria-label="Package pages"]')->length === 1, $view . ' primary tabs inside header');
     check($xpath->query('//nav[@aria-label="Package pages"]//a[@href="/dashboard/packages/logs"]')->length === 1, $view . ' includes a Logs tab');
     check($xpath->query('//nav[@aria-label="Package pages"]//a[@href="/dashboard/packages/logs"][@aria-current="page"]')->length === ($view === 'logs' ? 1 : 0), $view . ' marks the Logs tab current only on Logs');
+    check($xpath->query('//nav[@aria-label="Package pages"]//a[@href="/dashboard/packages/updates"]')->length === 1, $view . ' includes an Updates tab');
+    if ($view === 'updates') {
+        check($xpath->query('//nav[@aria-label="Package pages"]//a[@href="/dashboard/packages/updates"][@aria-current="page"]')->length === 1,
+            'Updates marks its tab as current');
+        check($xpath->query('//form[@action="/dashboard/packages/updates/run"]//button[@name="operation"]')->length === 3
+            && str_contains($html, 'Example needs attention.'), 'Updates renders all three actions and reports per-package failures');
+    }
     if ($view === 'show') {
         check($xpath->query('//header[contains(@class,"navbar")]//div[@class="theme-hero"]//img')->length === 1, 'Package header contains icon');
         check($xpath->query('//section[contains(@class,"pm-overview")]//img[contains(@class,"pm-package-preview")]')->length === 1, 'Preview belongs to Overview');
@@ -592,7 +693,7 @@ foreach (['runtimePath' => dirname(__DIR__) . '/PackageManager', 'rootPath' => d
 $runtime->eventDispatcher = new event\EventDispatcher();
 $runtime->setup(); $runtime->main();
 $factory = $runtime->getController('PackageManagerController');
-foreach (['index', 'browse', 'installFromDisk', 'help', 'logs'] as $action) {
+foreach (['index', 'browse', 'installFromDisk', 'help', 'logs', 'updates'] as $action) {
     $controller = (clone $factory)->create();
     $controller->{$action}([]);
     check(str_contains($controller->render(), 'dashboard-sidebar'), 'Actual controller renders ' . $action);
@@ -685,7 +786,7 @@ $rejected = $executor->execute($route, new router\http\Request(['REQUEST_METHOD'
 check($rejected instanceof response\Response && (new ReflectionProperty($rejected, 'statusCode'))->getValue($rejected) === 403, 'Real mutation route rejects forged CSRF');
 $rejected = $executor->execute($route, new router\http\Request(['REQUEST_METHOD' => 'GET']));
 check($rejected instanceof response\Response && (new ReflectionProperty($rejected, 'statusCode'))->getValue($rejected) === 405, 'Real mutation route rejects GET');
-foreach (['/install/review' => 'reviewInstallation', '/install/dependencies' => 'prepareDependencies', '/install/cancel' => 'cancelInstallation', '/install' => 'install', '/browse/install' => 'installFromMarketplace'] as $path => $action) {
+foreach (['/install/review' => 'reviewInstallation', '/install/dependencies' => 'prepareDependencies', '/install/cancel' => 'cancelInstallation', '/install' => 'install', '/browse/install' => 'installFromMarketplace', '/browse/connect' => 'connectMarketplace', '/updates/run' => 'runUpdates'] as $path => $action) {
     $route = (new router\Router('/dashboard/packages' . $path, $action, clone $factory))->setMethod('POST');
     $rejected = $executor->execute($route, new router\http\Request(['REQUEST_METHOD' => 'POST'], ['_token' => 'forged']));
     check($rejected instanceof response\Response && (new ReflectionProperty($rejected, 'statusCode'))->getValue($rejected) === 403, 'Installation mutation rejects forged CSRF');
@@ -695,6 +796,13 @@ foreach (['/install/review' => 'reviewInstallation', '/install/dependencies' => 
 $csrf = new router\security\Csrf();
 check($csrf->validateToken($csrf->token()), 'Framework CSRF accepts own token');
 check(!$csrf->validateToken('invalid'), 'Framework CSRF rejects forged token');
+$_POST = ['_token' => $csrf->token(), 'operation' => 'update-all'];
+$route = (new router\Router('/dashboard/packages/updates/run', 'runUpdates', clone $factory))
+    ->setMethod('POST')->addEventDispatcher($runtime->eventDispatcher);
+$redirect = $executor->execute($route, new router\http\Request(['REQUEST_METHOD' => 'POST'], $_POST));
+check($redirect instanceof redirect\Redirect && $redirect->getRedirectTo() === '/dashboard/packages/updates'
+    && str_contains($_SESSION['packagemanager_notice']['message'] ?? '', '0 updated'), 'A valid bulk update submission returns its result to Updates');
+$_POST = [];
 $systemMarketManifest = array_replace($base, ['name' => 'MarketplaceSystem', 'system_package' => true]);
 $systemMarketPath = ROOT . 'marketplace-system.zip';
 zipPackage($systemMarketPath, $systemMarketManifest);

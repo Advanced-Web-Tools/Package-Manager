@@ -62,6 +62,16 @@ final class Marketplace
         return $this->get("/package/{$id}/latest", self::compatibility());
     }
 
+    public function latestForPackage(int $id, string $name): array
+    {
+        $release = $this->latest($id);
+        if (($release['package_id'] ?? null) !== $id || ($release['name'] ?? null) !== $name
+            || !is_int($release['id'] ?? null) || $release['id'] < 1 || !is_string($release['version'] ?? null)) {
+            throw new RuntimeException('Marketplace returned an unexpected release.');
+        }
+        return $release;
+    }
+
     public function source(int $id, int $versionId): array
     {
         $url = $this->origin . self::PREFIX . "/package/{$id}";
@@ -69,11 +79,11 @@ final class Marketplace
             'latest_url' => $url . '/latest', 'download_url' => $url . "/versions/{$versionId}/download"];
     }
 
-    public static function fromSource(array $source): self
+    public static function fromSource(array $source, DependencyDownload $download = new DependencyDownload()): self
     {
         $suffix = self::PREFIX . '/package/' . (int) $source['storefront_id'] . '/latest';
         if (!str_ends_with($source['latest_url'], $suffix)) throw new RuntimeException('Invalid stored Marketplace source.');
-        return new self(substr($source['latest_url'], 0, -strlen($suffix)));
+        return new self(substr($source['latest_url'], 0, -strlen($suffix)), $download);
     }
 
     public function download(array $source, string $destination): void

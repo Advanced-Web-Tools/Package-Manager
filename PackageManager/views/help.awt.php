@@ -28,9 +28,11 @@
 <details><summary>Why did an upload or installation fail?</summary><p>Check the displayed error, PHP upload_max_filesize and post_max_size, ZIP support, filesystem permissions and database connectivity. The log migration must complete before package actions can start. Check that dependencies are installed and compatible. An installation hook may have failed after files or records were created; inspect the site and restore your backup or repair the partial deployment before retrying.</p></details>
 <details><summary>Why is metadata or a preview missing?</summary><p>All displayed package metadata comes from the installed database record. The dashboard does not read the installed manifest.json. Missing or broken icons and previews use the bundled default images. Restore package files from a trusted release rather than editing database records by hand.</p></details>
 <details><summary>How do I upgrade this package?</summary><p>Open a package in Browse, select a compatible release and choose Update or Downgrade. Downgrades require confirmation. Use the server deployment workflow for framework packages.</p></details>
+<details><summary>How do I connect an installed package to Marketplace?</summary><p>On the installed package overview, select Find a storefront. Open the matching storefront in Browse, verify the publisher, and select Connect installed package. This keeps the installed version in place and enables update checks from that storefront.</p></details>
+<details><summary>How do I turn on automatic updates?</summary><p>Open the Package Manager category in Settings Manager and enable Auto update packages, Auto update framework, or both. With the AWT automation runner scheduled, each enabled job runs every two hours. The package job checks connected storefronts for newer compatible stable releases.</p></details>
 </section>
 <section class="card" aria-labelledby="help-4"><h2 id="help-4" class="h4">Administrator CLI</h2>
-<details><summary>Where are the package commands?</summary><p>Package commands are already provided by AWT. Use the framework CLI help for the commands supported by your installed version. PackageManager does not register duplicate commands. This package's audit trail records dashboard actions.</p></details>
+<details><summary>Where are the package commands?</summary><p>AWT provides the package commands. Run <code>php awt help</code> for available commands. The Package Manager audit trail records dashboard actions and automatic package installations and updates.</p></details>
 </section>
 </div>
     </section>
